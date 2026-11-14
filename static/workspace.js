@@ -31,6 +31,7 @@
     ['monthly-coupon','/monthly-coupon','每月话费券'],
     ['coupons','/coupons','我的卡券'],
     ['mobile-rights','/mobile-rights','移动权益'],
+    ['member-benefits','/member-benefits','会员权益'],
     ['bills','/information','信息查询'],
     ['platforms','/platforms','平台管理'],
   ];
@@ -47,6 +48,7 @@
     <a href="/monthly-coupon" class="workspace-nav-item${page === 'monthly-coupon' ? ' active' : ''}"${page === 'monthly-coupon' ? ' aria-current="page"' : ''}>${icon('monthly')}<span>每月话费券</span></a>
     <a href="/coupons" class="workspace-nav-item${page === 'coupons' ? ' active' : ''}"${page === 'coupons' ? ' aria-current="page"' : ''}>${icon('wallet')}<span>我的卡券</span></a>
     <a href="/mobile-rights" class="workspace-nav-item${page === 'mobile-rights' ? ' active' : ''}"${page === 'mobile-rights' ? ' aria-current="page"' : ''}>${icon('rights')}<span>移动权益</span></a>
+    <a href="/member-benefits" class="workspace-nav-item${page === 'member-benefits' ? ' active' : ''}"${page === 'member-benefits' ? ' aria-current="page"' : ''}>${icon('rights')}<span>会员权益</span></a>
     <a href="/information" class="workspace-nav-item${page === 'bills' ? ' active' : ''}"${page === 'bills' ? ' aria-current="page"' : ''}>${icon('information')}<span>信息查询</span></a>
     <div id="workspace-activity-navigation"></div></nav>
     <div class="workspace-nav-divider"></div><button type="button" class="workspace-nav-item${page === 'accounts' ? ' active' : ''}" data-account-window>${icon('users')}<span>账号管理</span></button>
@@ -57,8 +59,14 @@
   const closeNavigation=document.createElement('button');closeNavigation.type='button';closeNavigation.className='workspace-nav-close';closeNavigation.setAttribute('aria-label','收起导航');
   closeNavigation.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12 M18 6 6 18"/></svg>';
   nav.append(closeNavigation);
+  const footer = nav.querySelector('.workspace-nav-footer');
   const networkAddresses = document.createElement('div');networkAddresses.id='workspace-addresses';
-  nav.querySelector('.workspace-nav-footer').append(networkAddresses);
+  footer.append(networkAddresses);
+  window.mountWorkspaceTheme?.(footer);
+  const initialNetwork = document.querySelector('meta[name="workspace-network"]');
+  if (window.mountWorkspaceNetwork) {
+    window.mountWorkspaceNetwork(networkAddresses, initialNetwork ? JSON.parse(initialNetwork.content) : null);
+  }
   const current = pages.find(item => item[0] === page);
   const topbar = document.createElement('header'); topbar.className = 'workspace-topbar';
   topbar.innerHTML = `<div class="workspace-location"><button class="workspace-menu" aria-label="展开导航" aria-controls="workspace-navigation" aria-expanded="false" type="button">${icon('menu')}</button><span class="workspace-location-root">工作空间</span><span class="workspace-location-divider">/</span>${currentGroup ? `<span class="workspace-location-parent">${currentGroup.title}</span><span class="workspace-location-divider">/</span>` : ''}<strong></strong></div><div class="workspace-topbar-actions"><span class="workspace-local"><i></i>本地运行</span><button type="button" class="workspace-account-button" data-account-window><span class="workspace-account-avatar">${icon('users')}</span><span>共享账号</span><span class="workspace-chevron">⌄</span></button></div>`;
@@ -75,28 +83,27 @@
   closeNavigation.addEventListener('click',toggleNavigation);
   nav.addEventListener('click',event => { if(event.target.closest('[data-account-window]') && document.body.classList.contains('workspace-nav-open')) toggleNavigation(); });
   document.addEventListener('keydown',event => { if(event.key === 'Escape' && document.body.classList.contains('workspace-nav-open')) toggleNavigation(); });
-  document.body.prepend(nav, topbar, shade);
   for (const link of nav.querySelectorAll('a.workspace-nav-item, a.workspace-subnav-item')) {
     link.dataset.issueKey = link.getAttribute('href');
   }
   nav.querySelector('.workspace-nav-group > summary').dataset.issueKey = '/lingxi/tasks';
   nav.querySelector('button[data-account-window]').dataset.issueKey = 'accounts';
-  import('/static/updates.js');
-  import('/static/network.js');
-  import('/static/navigation-issues.js');
-  import('/static/features.js');
 
-  const seasonalNavigation = nav.querySelector('#workspace-activity-navigation');
+  const marker = nav.querySelector('#workspace-activity-navigation');
+  const navigation = marker.parentElement;
   let seasonalTimer;
-  function showSeasonalCampaign(platforms) {
+  let refreshing = false, refreshPending = false;
+
+  function renderNavigation(features) {
     clearTimeout(seasonalTimer);
-    const active = platforms.filter(platform => platform.active);
-    const shown=active.filter(platform=>platform.navigation!=='checkin');
-    const existing=new Map([...nav.querySelectorAll('a[data-platform-id]')].map(link=>[link.dataset.platformId,link]));
-    for(const [id,link] of existing)if(!shown.some(platform=>platform.id===id))link.remove();
-    for(const platform of shown){
-      const present=existing.get(platform.id);
-      if(present){present.querySelector('.workspace-activity-title').textContent=platform.title;continue;}
+    const active = features.filter(feature => feature.can_delete && feature.active);
+    const visible = new Map(active.filter(platform => platform.navigation !== 'checkin').map(platform => [platform.id, platform]));
+    const existing = new Map([...navigation.querySelectorAll('a[data-platform-id]')].map(link => [link.dataset.platformId, link]));
+    for (const [id, link] of existing) {
+      if (!visible.has(id)) link.remove();
+    }
+    for (const platform of visible.values()) {
+      if (existing.has(platform.id)) continue;
       const link = document.createElement('a'); link.href = platform.home;
       link.dataset.platformId=platform.id;
       link.dataset.issueKey = platform.home;
@@ -104,22 +111,66 @@
       if (location.pathname === platform.home) link.setAttribute('aria-current','page');
       link.innerHTML = icon(platform.home==='/daily-gold'?'coins':'calendar');
       const label = document.createElement('span');label.className='workspace-activity-title';label.textContent = platform.title; link.append(label);
-      seasonalNavigation.parentElement.insertBefore(link,seasonalNavigation);
+      navigation.insertBefore(link, marker);
     }
-    window.dispatchEvent(new CustomEvent('workspace-navigation-changed'));
+
+    const positions = new Map(features.map((feature, index) => [feature.home, index]));
+    const roots = [...navigation.children].filter(node => node !== marker && node.getAttribute('href') !== '/');
+    const position = node => {
+      const link = node.matches('.workspace-nav-group') ? node.querySelector('.workspace-subnav-item') : node;
+      return positions.get(link?.getAttribute('href')) ?? positions.size;
+    };
+    roots.sort((left, right) => position(left) - position(right));
+    for (const [index, node] of roots.entries()) {
+      const current = navigation.children[index + 1];
+      if (current !== node) navigation.insertBefore(node, current);
+    }
+
+    for (const link of nav.querySelectorAll('a[href]')) {
+      const path = link.getAttribute('href');
+      const feature = features.find(item => path === item.home || item.id === 'lingxi' && path === '/lingxi/tasks'
+        || item.id === 'recharge' && path.startsWith('/recharge/'));
+      if (!feature) continue;
+      link.classList.toggle('workspace-feature-disabled', !feature.enabled);
+      link.title = feature.enabled ? '' : feature.title + '已关闭，可在平台管理重新开启';
+    }
+
     const remaining = active.map(platform => Date.parse(platform.end_at)-Date.parse(platform.server_time)).filter(Number.isFinite);
-    if (remaining.length) seasonalTimer = setTimeout(refreshSeasonalCampaign, Math.min(Math.max(0, Math.min(...remaining)), 2147483647));
+    if (remaining.length) seasonalTimer = setTimeout(refreshNavigation, Math.min(Math.max(1000, Math.min(...remaining)), 2147483647));
   }
-  async function refreshSeasonalCampaign() {
+
+  async function refreshNavigation() {
+    if (refreshing) { refreshPending = true; return; }
+    refreshing = true;
     try {
-      const response = await fetch('/api/platforms');
-      if (response.ok) showSeasonalCampaign((await response.json()).platforms);
-    } catch { /* Keep the last confirmed end timer while the local server restarts. */ }
+      const response = await fetch('/api/features');
+      if (!response.ok) return;
+      const {features} = await response.json();
+      const current = features.find(item => item.id === currentFeature);
+      if (current && !current.enabled !== (document.body.dataset.featureDisabled === 'true')) {
+        location.reload();
+        return;
+      }
+      renderNavigation(features);
+      window.dispatchEvent(new Event('workspace-navigation-changed'));
+    } catch { /* Keep the last confirmed navigation while the service reconnects. */ }
+    finally {
+      refreshing = false;
+      if (refreshPending) { refreshPending = false; void refreshNavigation(); }
+    }
   }
-  refreshSeasonalCampaign();
-  window.addEventListener('platforms-changed', refreshSeasonalCampaign);
-  window.addEventListener('focus', refreshSeasonalCampaign);
-  setInterval(() => { if (!document.hidden) refreshSeasonalCampaign(); }, 60000);
+
+  const initialFeatures = document.querySelector('meta[name="workspace-features"]');
+  if (initialFeatures) renderNavigation(JSON.parse(initialFeatures.content));
+  document.body.prepend(nav, topbar, shade);
+  import('/static/updates.js');
+  if (!window.mountWorkspaceNetwork) import('/static/network.js');
+  import('/static/navigation-issues.js');
+  if (!initialFeatures) void refreshNavigation();
+  window.addEventListener('features-changed', refreshNavigation);
+  window.addEventListener('platforms-changed', refreshNavigation);
+  window.addEventListener('focus', refreshNavigation);
+  setInterval(() => { if (!document.hidden) refreshNavigation(); }, 15000);
 
   if (page !== 'home') return;
   const date = new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'long',day:'numeric',weekday:'long'});

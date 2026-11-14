@@ -554,7 +554,7 @@ class ActivityClient:
         result = self.read('getPrizeList')
         return [public_prize(p) for p in (result.get('data') or {}).get('prizeList', []) if isinstance(p, dict)]
 
-    def claim(self, *, automatic=False):
+    def claim(self, *, automatic=False, before_submit=None):
         if not self.claim_lock.acquire(blocking=False):
             raise ActivityError('已有领取请求正在处理', 'CLAIM_BUSY', 409)
         try:
@@ -571,6 +571,8 @@ class ActivityClient:
             if not state['can_claim']:
                 retryable = bool(state['rd_status'] in {1, 7} or state['server_time'] is None)
                 raise ActivityError(state['reason'], 'NOT_AVAILABLE', 409, retryable=retryable)
+            if before_submit is not None:
+                before_submit()
             self.last_claim = time.monotonic()
             self.uncertain = True
             self.total_submissions += 1

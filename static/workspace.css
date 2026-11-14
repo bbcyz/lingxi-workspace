@@ -236,3 +236,178 @@ body.workspace-app > :is(.portal-shell,.shell,.task-shell,.activity-shell){width
 .workspace-nav-item.workspace-feature-disabled,.workspace-subnav-item.workspace-feature-disabled{opacity:.45;filter:grayscale(.7)}
 
 .workspace-coupon-badge{background:#70d5a51f;color:#9ce7c3}.workspace-nav-item.active .workspace-coupon-badge{background:#70d5a51f;color:#9ce7c3}
+
+@media (width > 900px) {
+  body.workspace-app {
+    --control-primary: #293747;
+    --control-primary-hover: #1c2938;
+    --control-primary-ink: #fff;
+    --control-ink: #3b4a5b;
+    --control-secondary: #f7f8fa;
+    --control-border: #dbe1e8;
+    --control-hover: #edf0f4;
+    --control-hover-border: #c8d1db;
+    --control-selected: #e9eff5;
+    --control-selected-ink: #334c65;
+    --control-selected-border: #d3dfea;
+    --control-tab-ring: inset 0 0 0 1px var(--control-selected-border);
+    --control-danger: #963c42;
+    --control-danger-hover: #792d33;
+    --control-danger-bg: transparent;
+    --control-danger-hover-bg: #f7eded;
+    --control-danger-border: #e4d8da;
+    --control-confirm: #903840;
+    --control-confirm-hover: #772e35;
+    --control-disabled: #f2f4f6;
+    --control-disabled-ink: #667382;
+    --control-disabled-border: #e3e7ec;
+    --control-focus: #55789d;
+    --control-toggle: #526d89;
+    --control-toggle-off: #a4afbb;
+  }
+
+  body.workspace-app :is(button, a):is(.primary, .portal-primary, .primary-button, .workspace-primary, .access-primary, .update-primary) {
+    background: var(--control-primary);
+    border-color: var(--control-primary);
+    color: var(--control-primary-ink);
+    box-shadow: none;
+    font-weight: 600;
+  }
+  body.workspace-app :is(button, a):is(.primary, .portal-primary, .primary-button, .workspace-primary, .access-primary, .update-primary):hover:not(:disabled) {
+    background: var(--control-primary-hover);
+    border-color: var(--control-primary-hover);
+    color: var(--control-primary-ink);
+  }
+
+  body.workspace-app :is(button, a):is(.secondary, .portal-secondary, .secondary-button, .update-secondary, .update-asset, .workspace-version, .schedule-action),
+  body.workspace-app .chat-accounts button.secondary,
+  body.workspace-app .platforms-order-controls button,
+  body.workspace-app .row-actions button.portal-secondary {
+    background: var(--control-secondary);
+    border-color: var(--control-border);
+    color: var(--control-ink);
+    font-weight: 500;
+  }
+  body.workspace-app :is(button, a):is(.secondary, .portal-secondary, .secondary-button, .update-secondary, .update-asset, .workspace-version, .schedule-action):hover:not(:disabled),
+  body.workspace-app .chat-accounts button.secondary:hover:enabled,
+  body.workspace-app .platforms-order-controls button:hover:enabled,
+  body.workspace-app .row-actions button.portal-secondary:hover:enabled {
+    background: var(--control-hover);
+    border-color: var(--control-hover-border);
+    color: var(--control-ink);
+  }
+
+  body.workspace-app :is(button, a):is(.quiet, .portal-quiet, .quiet-button, .text-button, .account-manager, .workspace-account-button, .close, .icon-button, .update-icon-close, .account-manager-close),
+  body.workspace-app button:is(.bills-item-toggle, .bills-card-heading, .usage-group-heading),
+  body.workspace-app .bills-month-controls button.quiet,
+  body.workspace-app :is(.task-actions, .row-actions) button:not(.primary, .portal-primary, .secondary, .portal-secondary, .danger, .logout-action, .stop),
+  body.workspace-app .more-menu > summary {
+    color: var(--control-ink);
+    background-color: transparent;
+  }
+  body.workspace-app :is(button, a):is(.quiet, .portal-quiet, .quiet-button, .text-button, .account-manager, .workspace-account-button, .close, .icon-button, .update-icon-close, .account-manager-close):hover:not(:disabled),
+  body.workspace-app .more-menu > summary:hover {
+    background: var(--control-hover);
+    color: var(--control-ink);
+  }
+
+  body.workspace-app :is(button, a):is(.danger, .danger-outline, .logout-action, .platforms-danger, .services-cancel-action),
+  body.workspace-app .row-actions button.stop {
+    background: var(--control-danger-bg);
+    border-color: var(--control-danger-border);
+    color: var(--control-danger);
+    font-weight: 500;
+  }
+  body.workspace-app :is(button, a):is(.danger, .danger-outline, .logout-action, .platforms-danger, .services-cancel-action):hover:not(:disabled),
+  body.workspace-app .row-actions button.stop:hover:enabled {
+    background: var(--control-danger-hover-bg);
+    border-color: var(--control-danger-border);
+    color: var(--control-danger-hover);
+  }
+  body.workspace-app :is(#wed-stop-confirm, #services-cancel-submit, dialog button[type="submit"]:is(.danger, .platforms-danger)):enabled {
+    background: var(--control-confirm);
+    border-color: var(--control-confirm);
+    color: #fff;
+  }
+  body.workspace-app :is(#wed-stop-confirm, #services-cancel-submit, dialog button[type="submit"]:is(.danger, .platforms-danger)):hover:enabled {
+    background: var(--control-confirm-hover);
+    border-color: var(--control-confirm-hover);
+  }
+
+  body.workspace-app :is([role="tab"], .filters button, .filter-tabs button, .coupons-tabs button, .checkin-tabs button, .wed-filters button, .bills-month-tab, .services-tab) {
+    color: var(--control-ink);
+    font-weight: 500;
+  }
+  body.workspace-app :is([role="tab"], .filters button, .filter-tabs button, .coupons-tabs button, .checkin-tabs button, .wed-filters button, .bills-month-tab, .services-tab):hover:enabled {
+    background: var(--control-hover);
+    color: var(--control-selected-ink);
+  }
+  body.workspace-app :is([role="tab"], .filters button, .filter-tabs button, .coupons-tabs button, .checkin-tabs button, .wed-filters button, .bills-month-tab, .services-tab):is(.selected, .active, [aria-selected="true"], [aria-pressed="true"]):enabled {
+    background: var(--control-selected);
+    color: var(--control-selected-ink);
+    box-shadow: var(--control-tab-ring);
+    font-weight: 600;
+  }
+  body.workspace-app button:is(.bills-account, .coupons-account, .rights-account, .wed-account, .stat):is(.selected, .active, [aria-pressed="true"]) {
+    background: var(--control-selected);
+    border-color: var(--control-selected-border);
+  }
+  body.workspace-app button.workspace-version.available {
+    background: var(--control-selected);
+    border-color: var(--control-selected-border);
+    color: var(--control-selected-ink);
+  }
+  body.workspace-app button:is(.coupons-use-button, .account-choice-login):enabled {
+    background: var(--control-secondary);
+    border-color: var(--control-border);
+    color: var(--control-ink);
+    font-weight: 600;
+  }
+  body.workspace-app button:is(.coupons-use-button, .account-choice-login):hover:enabled {
+    background: var(--control-hover);
+    border-color: var(--control-hover-border);
+  }
+
+  body.workspace-app button:disabled,
+  body.workspace-app button:disabled:hover,
+  body.workspace-app :is(#coupons-use, .platforms-order-controls, .bills-month-controls, .account-manager-dialog) button:disabled,
+  body.workspace-app button#services-cancel-submit:disabled {
+    background: var(--control-disabled);
+    border-color: var(--control-disabled-border);
+    color: var(--control-disabled-ink);
+    box-shadow: none;
+    opacity: 1;
+    cursor: not-allowed;
+  }
+  body.workspace-app :is(button, a, summary):focus-visible {
+    outline: 2px solid var(--control-focus);
+    outline-offset: 2px;
+  }
+  body.workspace-app .workspace-nav :is(a, button, summary):focus-visible {
+    outline-color: #a9cdff;
+  }
+
+  body.workspace-app .platforms-switch-track {
+    background: var(--control-toggle-off);
+  }
+  body.workspace-app .platforms-feature-switch input:checked + .platforms-switch-track {
+    background: var(--control-toggle);
+  }
+  body.workspace-app .platforms-feature-switch input:focus-visible + .platforms-switch-track {
+    outline: 2px solid var(--control-focus);
+    outline-offset: 2px;
+  }
+  body.workspace-app .workspace-nav {
+    --nav-secondary: #c4d0df;
+    --nav-hover: #253851;
+    --nav-selected: #2b4260;
+  }
+  body.workspace-app .workspace-nav .workspace-feature-disabled {
+    color: #91a3bb;
+    filter: none;
+    opacity: 1;
+  }
+  body.workspace-app .workspace-nav-footer .network-copy {
+    border-color: #667d99;
+  }
+}

@@ -57,8 +57,9 @@ def failure_counts(accounts, snapshots, now):
                 problems.add(login_id)
     counts['/star-day'] = len(problems)
     # Accepted exchanges, closed/expired orders and unpaid orders are not failed
-    # tasks. Uncertain submissions remain actionable until explicitly resolved.
+    # tasks. Only unresolved fee coupon submissions contribute to this badge.
     counts['/coupons'] = sum(record.get('login_id') in known and record['state'] in ('unknown', 'uncertain')
+        and record.get('category', 'fee') == 'fee' and record.get('kind') not in ('flow', 'rights')
         for record in snapshots.get('coupons', {}).values())
     return counts
 
@@ -73,15 +74,22 @@ def register_navigation_status(app, accounts, sources, platforms):
         now = datetime.now(SHANGHAI)
         known_accounts = accounts()
         counts = failure_counts(known_accounts, snapshots, now)
+        member_benefits = app.extensions.get('member_benefits')
+        member_counts = (member_benefits.available_counts({account['id'] for account in known_accounts})
+                         if member_benefits is not None else {})
+        counts['/member-benefits'] = sum(member_counts.values())
         reminders = reminder_summary(snapshots.get('coupon_reminders', {}),
             [account['id'] for account in known_accounts], snapshots.get('coupons', {}), now)
         features = app.extensions.get('feature_control')
         for path, feature_id in {'/lingxi/tasks':'lingxi', '/recharge/':'recharge', '/checkin':'checkin',
-                '/star-day':'star-day', '/monthly-coupon':'monthly-coupon', '/coupons':'coupons'}.items():
+                '/star-day':'star-day', '/monthly-coupon':'monthly-coupon', '/coupons':'coupons',
+                '/member-benefits':'member-benefits'}.items():
             if features is not None and not features.enabled(feature_id):
                 counts[path] = 0
                 if feature_id == 'coupons':
                     reminders = {'accounts': {}, 'total': 0}
+                if feature_id == 'member-benefits':
+                    member_counts = {}
         with platforms.lock:
             for entry in platforms.platforms.values():
                 if entry['stopped'] or features is not None and not features.enabled(entry['id']) or not entry['controller'].metadata().get('active'):
@@ -92,4 +100,5 @@ def register_navigation_status(app, accounts, sources, platforms):
                     counts[entry['home']] = count
                     if entry['navigation'] == 'checkin':
                         counts['/checkin'] += count
-        return jsonify(counts=counts, coupon_reminders=reminders, checked_at=now.isoformat())
+        return jsonify(counts=counts, coupon_reminders=reminders, member_benefit_counts=member_counts,
+                       checked_at=now.isoformat())

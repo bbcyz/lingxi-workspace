@@ -13,10 +13,10 @@ class Element{
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const descendants=node=>[node,...node.children.flatMap(descendants)];
-async function fixture({managed=true,ipv6=true,clipboard=true}={}){
-  const nodes=new Map(),calls=[],events={},copied=[],timers=[],body=new Element();
+async function fixture({managed=true,ipv6=true,clipboard=true,portEditable=managed,portRejected=false,desktop=false}={}){
+  const nodes=new Map(),calls=[],events={},copied=[],timers=[],redirects=[],body=new Element();
   const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
-  let state={managed,settings:{ipv4:true,ipv6,custom:false,addresses:[]},active:{ipv4:true,ipv6},restart_required:false,port:5500,
+  let state={managed,port_editable:portEditable,settings:{ipv4:true,ipv6,custom:false,addresses:[]},active:{ipv4:true,ipv6},restart_required:false,port:5500,
     ipv4:['http://192.168.31.176:5500/','http://10.1.1.2:5500/','http://172.16.1.2:5500/'],
     ipv6:['http://[2409:8a6a::1234]:5500/'],local:['http://127.0.0.1:5500/','http://[::1]:5500/']};
   state.listening={ipv4:state.ipv4,ipv6:ipv6?state.ipv6:[]};state.unavailable=[];
@@ -24,13 +24,20 @@ async function fixture({managed=true,ipv6=true,clipboard=true}={}){
     {url:state.ipv6[0],address:'2409:8a6a::1234',family:'ipv6',available:true,listening:ipv6}];
   const fetch=async(url,options)=>{
     calls.push({url,options});
-    if(options?.method==='POST')state={...state,settings:JSON.parse(options.body),applying:true,restart_required:false,message:'监听设置已保存，正在更新监听，无需重启。'};
+    if(options?.method==='POST'){
+      const settings=JSON.parse(options.body),port=settings.port;
+      if(port&&portRejected)return {ok:false,json:async()=>({error:'无法监听端口，可能已被占用。'})};
+      state={...state,settings,port:port??state.port,port_changed:Boolean(port),applying:!port,restart_required:false,
+        message:port?'监听已重启，正在打开新端口。':'监听设置已保存，正在更新监听，无需重启。'};
+    }
     return {ok:true,json:async()=>state};
   };
   vm.runInNewContext(fs.readFileSync(new URL('../static/network.js',import.meta.url),'utf8'),{
     document:{getElementById:get,createElement:()=>new Element(),body,execCommand(command){assert.equal(command,'copy');assert.ok(body.children.at(-1).selected);copied.push(body.children.at(-1).value);return true;}},window:{addEventListener:(name,fn)=>{events[name]=fn;}},fetch,
-    navigator:clipboard?{clipboard:{async writeText(value){copied.push(value);}}}:{},setTimeout(){},setInterval(fn,ms){timers.push({fn,ms});}});
-  await flush();return {get,calls,events,copied,body,timers,setState(update){state={...state,...update};}};
+    navigator:clipboard?{clipboard:{async writeText(value){copied.push(value);}}}:{},setTimeout(){},setInterval(fn,ms){timers.push({fn,ms});},
+    URL,location:{href:'http://[::1]:5500/platforms#network-settings-form',replace:url=>redirects.push(url)},
+    sessionStorage:{getItem:()=>desktop?'1':null}});
+  await flush();return {get,calls,events,copied,body,timers,redirects,setState(update){state={...state,...update};}};
 }
 
 test('sidebar displays LAN and properly bracketed IPv6 URLs with additional IPv4 addresses',async()=>{
@@ -56,6 +63,20 @@ test('sidebar uses compact addresses while copying the full IPv6 URL with its po
   assert.ok(descendants(get('workspace-addresses')).some(node=>node.href==='/platforms#network-settings-form'));
 });
 
+test('unchanged addresses keep the footer, copy feedback and expanded extra addresses', async () => {
+  const {get,events} = await fixture();
+  const footer = get('workspace-addresses'), original = footer.children[0];
+  const extra = descendants(original).find(node => node.className === 'network-more');
+  const copy = descendants(original).find(node => node.ariaLabel === '复制 IPv6 访问地址');
+  extra.open = true;
+  await copy.handlers.click();
+  await events.focus();
+  await flush();
+  assert.equal(footer.children[0], original);
+  assert.equal(extra.open, true);
+  assert.equal(copy.textContent, '已复制');
+});
+
 test('copy works on HTTP LAN pages without the secure clipboard API',async()=>{
   const {get,copied,body}=await fixture({clipboard:false});
   const copy=descendants(get('workspace-addresses')).find(node=>node.ariaLabel==='复制 IPv4 访问地址');
@@ -73,6 +94,31 @@ test('saving persists independent switches and reports live reconfiguration',asy
   assert.deepEqual(JSON.parse(request.options.body),{ipv4:false,ipv6:true,custom:false,addresses:[]});
   assert.match(get('network-description').textContent,/正在更新监听 · 无需重启/);
   assert.equal(get('network-save').disabled,false);
+});
+
+test('saving a new port preserves the draft on refresh and navigates to the new IPv6 address',async()=>{
+  const {get,calls,events,redirects}=await fixture({desktop:true});
+  const port=get('network-port');
+  assert.equal(port.value,'5500');assert.equal(port.disabled,false);
+  port.value='5600';port.handlers.input();
+  await events.focus();assert.equal(port.value,'5600');
+  await get('network-settings-form').handlers.submit({preventDefault(){}});
+  assert.equal(JSON.parse(calls.find(call=>call.options?.method==='POST').options.body).port,5600);
+  assert.deepEqual(redirects,['http://[::1]:5600/platforms?desktop=1#network-settings-form']);
+});
+
+test('invalid or occupied ports leave the current page in place',async()=>{
+  const {get,calls,redirects}=await fixture({portRejected:true});
+  const port=get('network-port');port.value='65536';port.handlers.input();
+  const submit=get('network-settings-form').handlers.submit;
+  await submit({preventDefault(){}});
+  assert.equal(calls.some(call=>call.options?.method==='POST'),false);
+  assert.match(get('network-feedback').textContent,/1 至 65535/);
+  port.value='5501';port.handlers.input();
+  await submit({preventDefault(){}});
+  assert.equal(port.value,'5501');
+  assert.match(get('network-feedback').textContent,/被占用/);
+  assert.deepEqual(redirects,[]);
 });
 
 test('periodic local refresh updates changed IPs and selected checkboxes without saving or restarting',async()=>{

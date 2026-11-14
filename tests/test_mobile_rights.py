@@ -154,6 +154,7 @@ class RightsProtocolTests(unittest.TestCase):
         result=self.client.query(['未发放的权益'])
         self.assertEqual(len(result['items']),4);self.assertTrue(result['complete']);self.ss.get.assert_called_once()
         self.assertEqual(result['items'][2]['status'],'官方状态 3');self.assertEqual(result['items'][3]['status'],'本月未发放')
+        self.assertEqual([item['can_remove'] for item in result['items']],[False,False,False,True])
         self.assertTrue(result['items'][0]['can_claim']);self.assertNotEqual(result['items'][0]['id'],'o1')
         self.assertNotIn('rightReceive',self.ss.get.call_args.args[0])
     def test_only_an_order_from_this_successful_query_can_be_claimed_once(self):
@@ -269,6 +270,31 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(rebuilt._claimed('a','order-a')['status'],'unknown')
         self.manager.forget('a')
         self.assertNotIn('a',self.manager.data['tracked']);self.assertEqual(self.manager.data['tracked']['b'],['其他权益'])
+    def test_removal_checks_current_official_orders_and_preserves_pending_claim_actions(self):
+        context=self.manager._context('a');context.rights.now=lambda:NOW
+        name='关注权益';self.manager.track('a',name,True);self.manager.track('b',name,True)
+        context.session.get.return_value=inventory([order('claimable')])
+        action=self.manager.query('a')['items'][0]['id']
+        for status in ('0','1','2','4','5'):
+            with self.subTest(status=status):
+                context.session.get.return_value=inventory([order('official-order',status,name=name)])
+                with self.assertRaises(MobileRightsError) as raised:self.manager.track('a',name,False)
+                self.assertEqual(raised.exception.code,'RIGHTS_ORDER_EXISTS')
+                self.assertEqual(self.manager.data['tracked']['a'],[name])
+        context.session.get.return_value=inventory([order('old','0',name=name,when=NOW.replace(month=10))])
+        self.assertEqual(self.manager.track('a',name,False),{'tracked':[]})
+        self.assertEqual(self.manager.data['tracked']['b'],[name])
+        self.assertEqual(context.rights.orders,{action:'claimable'})
+        self.assertEqual(self.storage.activities['mobile-rights']['tracked'],{'a':[],'b':[name]})
+    def test_incomplete_month_does_not_confirm_an_absent_right_can_be_removed(self):
+        context=self.manager._context('a');context.rights.now=lambda:NOW
+        name='关注权益';self.manager.track('a',name,True)
+        context.session.get.return_value=Response({'X_RESULTCODE':'0','data':{'list':[order()],'hasNext':True}})
+        result=self.manager.query('a')
+        self.assertFalse(result['complete']);self.assertFalse(result['items'][-1]['can_remove'])
+        with self.assertRaises(MobileRightsError) as raised:self.manager.track('a',name,False)
+        self.assertEqual(raised.exception.code,'RIGHTS_QUERY_INCOMPLETE')
+        self.assertEqual(self.manager.data['tracked']['a'],[name])
     def test_routes_list_accounts_without_connecting_and_reject_unowned_actions(self):
         app=Flask(__name__);register_mobile_rights(app,self.accounts,self.credentials);manager=app.extensions['mobile_rights']
         client=app.test_client();manager.connector=self.connector
@@ -277,6 +303,25 @@ class ManagerTests(unittest.TestCase):
         manager.claim=Mock(return_value={'status':'success'})
         result=client.post('/api/mobile-rights/claim',json={'login_id':'a','id':'server-owned','order_id':'inject','phone':'13900000000'})
         self.assertEqual(result.status_code,200);manager.claim.assert_called_once_with('a','server-owned')
+
+    def test_batch_tracking_validates_the_whole_list_and_saves_new_names_once(self):
+        self.manager.track('a','已有记录',True)
+        self.manager.track('b','另一账号记录',True)
+        app=Flask(__name__);register_mobile_rights(app,self.accounts,self.credentials)
+        manager=app.extensions['mobile_rights']
+        manager.track_many=self.manager.track_many
+        client=app.test_client()
+        endpoint='/api/mobile-rights/track-batch'
+        with patch.object(self.storage,'save_activity_data',wraps=self.storage.save_activity_data) as save:
+            self.assertEqual(client.post(endpoint,json={'login_id':'a','names':['有效名称',None]}).status_code,400)
+            save.assert_not_called()
+            body={'login_id':'a','names':['  已有记录  ','新增记录',' 新增记录 ','第二条新增']}
+            self.assertEqual(client.post(endpoint,json=body).json,
+                             {'tracked':['已有记录','新增记录','第二条新增'],'added':2})
+            self.assertEqual(client.post(endpoint,json=body).json['added'],0)
+            save.assert_called_once()
+        self.assertEqual(self.storage.activities['mobile-rights']['tracked']['b'],['另一账号记录'])
+        self.connector.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

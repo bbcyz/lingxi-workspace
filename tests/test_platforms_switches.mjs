@@ -13,12 +13,12 @@ class Element {
 }
 const descendants=node=>[node,...node.children.flatMap(descendants)];
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
-async function fixture({fail=false,removed=false}={}){
+async function fixture({fail=false,removed=false,endReason=null}={}){
   const nodes=new Map(),calls=[],events=[];
   const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
   const features=[{id:'star-day',title:'星动日',home:'/star-day',enabled:true,state:'running',active:true,can_delete:false},
     {id:'seven-day',title:'7日打卡分百万',home:'/seven-day',enabled:false,state:'running',active:false,temporary:true,can_delete:true},
-    {id:'old',title:'已结束活动',home:'/old',enabled:true,state:'expired',active:false,temporary:true,can_delete:true}];
+    {id:'old',title:'已结束活动',home:'/old',enabled:true,state:'expired',active:false,temporary:true,can_delete:true,end_reason:endReason,end_at:'2026-11-30T23:59:59+08:00'}];
   if(removed)features.push(
     {id:'deleted',title:'已移除渠道',state:'deleted',active:false,can_delete:true,removal_pending:false},
     {id:'pending',title:'待清理渠道',state:'deleted',active:false,can_delete:true,removal_pending:true});
@@ -101,4 +101,15 @@ test('a rejected ordering leaves the confirmed order visible and reports the err
   await descendants(get('platforms-rows')).find(node=>node['aria-label']==='上移7日打卡分百万').handlers.click();
   assert.equal(get('platforms-rows').children[0].children[0].children[0].textContent,'星动日');
   assert.equal(get('platforms-feedback').textContent,'保存失败');
+});
+
+test('a sold-out activity explains the early stop and labels its date as planned',async()=>{
+  const {get,calls}=await fixture({endReason:'sold_out'});
+  const row=get('platforms-rows').children[2],nodes=descendants(row);
+  const badge=nodes.find(node=>node.textContent==='红包已领完 · 已停止');
+  assert.ok(badge);assert.match(badge.title,/库存已耗尽.*打卡和夺宝/);
+  assert.ok(nodes.some(node=>node.textContent==='计划截止时间'));
+  assert.equal(nodes.some(node=>node.textContent==='已到期 · 已停止'),false);
+  assert.equal(nodes.some(node=>node.tag==='input'),false);
+  assert.ok(calls.every(call=>!call.payload));
 });

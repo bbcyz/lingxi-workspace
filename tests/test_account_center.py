@@ -2,10 +2,12 @@ import unittest
 import time
 from copy import deepcopy
 from datetime import datetime, timedelta
+from threading import Lock
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app import create_app
-from app_login import AppLoginError
+from app_login import AppLoginError, AppLoginSession
 from lingxi_scheduler import SHANGHAI
 from recharge.accounts import AccountManager
 from recharge.cmcc import ActivityClient
@@ -165,10 +167,16 @@ class AccountCenterTests(unittest.TestCase):
         self.assertEqual(store.pending['19900000004'].phone, '19900000004')
 
     def sms_flow(self):
-        flow = Mock(user_info={})
+        flow = Mock(user_info={}, phone='', sms_sent_at=0, sms_request_id='')
+        def status(*, reused=False):
+            return {'sent': True, 'phone_masked': flow.phone[:3] + '****' + flow.phone[-4:],
+                    'sms_request_id': flow.sms_request_id, 'sms_reused': reused,
+                    'retry_after': 60, 'expires_in': 600}
         def send(phone):
             flow.phone, flow.sms_sent_at = phone, time.monotonic()
-            return {'sent': True, 'phone_masked': phone[:3] + '****' + phone[-4:], 'retry_after': 60}
+            flow.sms_request_id = f'request-{flow.send_sms.call_count}'
+            return status()
+        flow.sms_status.side_effect = status
         flow.send_sms.side_effect = send
         flow.login.return_value = 'JSESSIONID=renewed'
         flow.export_context.return_value = {'refreshToken': 'new-refresh'}
@@ -214,12 +222,73 @@ class AccountCenterTests(unittest.TestCase):
     def test_relogin_reuses_pending_code_and_explicit_resend_uses_same_flow(self, factory):
         flow = factory.return_value = self.sms_flow()
         self.app.extensions['unified_logins'].mark(self.a, 'login_required')
-        for _ in range(2):
-            self.assertEqual(self.http.post('/api/logins/relogin/sms', json={'id': self.a.id}).status_code, 200)
+        other = self.app.test_client()
+        path = '/api/logins/relogin/sms'
+        first = self.http.post(path, json={'id': self.a.id})
+        self.assertEqual(first.status_code, 200)
+        batch = first.json['sms_request_id']
+        reused = other.post('/api/logins/sms', json={'phone': self.a.phone})
+        self.assertEqual(reused.status_code, 200)
+        self.assertEqual(reused.json['sms_request_id'], batch)
+        self.assertTrue(reused.json['sms_reused'])
         flow.send_sms.assert_called_once_with(self.a.phone)
-        self.assertEqual(self.http.post('/api/logins/relogin/sms', json={'id': self.a.id, 'resend': True}).status_code, 200)
+        resend = {'id': self.a.id, 'resend': True, 'sms_request_id': batch}
+        latest = self.http.post(path, json=resend)
+        self.assertEqual(latest.status_code, 200)
+        latest_batch = latest.json['sms_request_id']
+        self.assertNotEqual(batch, latest_batch)
+        self.assertEqual(other.post(path, json=resend).json['sms_request_id'], latest_batch)
+        stale = other.post('/api/logins/relogin', json={'id': self.a.id, 'code': '123456', 'sms_request_id': batch})
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json['code'], 'SMS_FLOW_CHANGED')
+        self.assertEqual(stale.json['sms']['sms_request_id'], latest_batch)
+        flow.login.assert_not_called()
         self.assertEqual(flow.send_sms.call_count, 2)
         factory.assert_called_once()
+
+    @patch('app.AppLoginSession')
+    def test_send_timeout_keeps_shared_cooldown_across_login_entries(self, factory):
+        flow = factory.return_value = AppLoginSession(initialized_at=time.monotonic(), xk='fixture')
+        self.app.extensions['unified_logins'].mark(self.a, 'login_required')
+        with patch.object(flow, 'call', side_effect=AppLoginError('network')) as upstream:
+            failed = self.http.post('/api/logins/relogin/sms', json={'id': self.a.id, 'force': True})
+            self.assertEqual(failed.status_code, 400)
+            retry = self.app.test_client().post('/api/logins/sms', json={'phone': self.a.phone, 'force': True})
+            self.assertEqual(retry.status_code, 400)
+            self.assertEqual(retry.json['code'], 'SMS_COOLDOWN')
+            self.assertGreater(retry.json['retry_after'], 0)
+        upstream.assert_called_once()
+        factory.assert_called_once()
+
+    @patch('app.AppLoginSession')
+    def test_explicit_relogin_reuses_each_accounts_device_id_without_old_cookie(self, factory):
+        self.a.app_context = {'device_id':'device-a','xk':'old-a'}
+        self.b.app_context = {'device_id':'device-b','xk':'old-b'}
+        flows = [self.sms_flow(), self.sms_flow()]
+        factory.side_effect = flows
+        for saved, flow in zip((self.a,self.b), flows):
+            response = self.http.post('/api/logins/relogin/sms',json={'id':saved.id,'force':True})
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(flow.device_id,saved.app_context['device_id'])
+            flow.send_sms.assert_called_once_with(saved.phone)
+            self.assertNotEqual(flow.cookie,saved.cookie)
+            self.assertNotIn(saved.app_context['device_id'],response.data.decode())
+        self.assertIsNot(flows[0],flows[1])
+
+    @patch('app.AppLoginSession')
+    def test_expired_sms_session_keeps_its_device_identity_when_user_requests_new_code(self, factory):
+        store = self.app.extensions['unified_logins']
+        self.a.app_context = {'device_id':'previous-saved-device'}
+        expired = self.sms_flow()
+        expired.phone,expired.sms_sent_at,expired.device_id = self.a.phone,time.monotonic()-601,'pending-device'
+        store.pending[self.a.phone] = expired
+        fresh = factory.return_value = self.sms_flow()
+        response = self.http.post('/api/logins/relogin/sms',json={'id':self.a.id,'force':True})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(fresh.device_id,'pending-device')
+        self.assertIs(store.pending[self.a.phone],fresh)
+        fresh.send_sms.assert_called_once_with(self.a.phone)
+        expired.send_sms.assert_not_called()
 
     @patch('app.verify_token')
     @patch('app.AppLoginSession')
@@ -282,6 +351,30 @@ class AccountCenterTests(unittest.TestCase):
         self.assertEqual(self.a.status, 'active')
         flow.send_sms.assert_called_once()
 
+
+    @patch('app.verify_token')
+    @patch('app.exchange_cookie', return_value='renewed-token')
+    @patch('app.AppLoginSession')
+    def test_coupon_preview_does_not_block_explicit_relogin_but_live_verification_does(self, factory, exchange, verify):
+        flow = factory.return_value = self.sms_flow()
+        coupons = self.app.extensions['coupon_uses']
+        preview = SimpleNamespace(login_id=self.a.id, lock=Lock(), context=Mock(__exit__=Mock()), result=None,
+                                  expires=time.monotonic()+600, serial='', sms_sent=False,
+                                  captcha_required=False, sdk_bound=False)
+        other = SimpleNamespace(**{**vars(preview), 'login_id': self.b.id, 'lock': Lock(), 'context': Mock(__exit__=Mock())})
+        coupons.operations.update(preview=preview, other=other)
+        payload = {'id': self.a.id, 'force': True}
+        with preview.lock:
+            self.assertEqual(self.http.post('/api/logins/relogin/sms', json=payload).json['code'], 'ACCOUNT_BUSY')
+        preview.captcha_required = True
+        self.assertEqual(self.http.post('/api/logins/relogin/sms', json=payload).json['code'], 'ACCOUNT_BUSY')
+        flow.send_sms.assert_not_called()
+        preview.captcha_required = False
+        self.assertEqual(self.http.post('/api/logins/relogin/sms', json=payload).status_code, 200)
+        self.assertEqual(self.http.post('/api/logins/relogin', json={**payload, 'code': '123456'}).status_code, 200)
+        flow.send_sms.assert_called_once_with(self.a.phone)
+        self.assertIsNone(preview.context)
+        other.context.__exit__.assert_not_called()
 
     def test_service_cancellation_sms_blocks_relogin_and_logout_only_for_its_account(self):
         cancellations = self.app.extensions['services_queries'].cancellations

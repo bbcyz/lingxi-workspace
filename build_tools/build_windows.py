@@ -63,7 +63,7 @@ def main():
     shutil.copy2(assets/'app.ico',ROOT/'static/app.ico')
     notice_dir=ROOT/'.build/notices';notice_dir.mkdir(exist_ok=True)
     shutil.copy2(Path(sys.base_prefix)/'LICENSE.txt',notice_dir/'Python-LICENSE.txt')
-    dependencies=['Flask','Werkzeug','Jinja2','MarkupSafe','itsdangerous','click','blinker','curl_cffi','cffi','certifi','cryptography','waitress','pystray','Pillow','six','PyInstaller','qrcode']
+    dependencies=['Flask','Werkzeug','Jinja2','MarkupSafe','itsdangerous','click','blinker','curl_cffi','cffi','certifi','cryptography','requests','urllib3','charset-normalizer','idna','waitress','pystray','Pillow','six','PyInstaller','qrcode']
     for name in dependencies:
         dist=importlib.metadata.distribution(name)
         for entry in dist.files or []:
@@ -88,8 +88,13 @@ def main():
         (ROOT/'app_login_public_key.json','.'),(ROOT/'mobile_rights_gateway.json','.'),(assets,'desktop_assets'),
         (ROOT/'recharge/static','recharge/static'),(ROOT/'recharge/templates','recharge/templates'),
         (ROOT/'recharge/browser_bridge.mjs','recharge'),(ROOT/'recharge/package.json','recharge'),
+        (ROOT/'recharge/member_benefits_runtime/dfp_node.mjs','recharge/member_benefits_runtime'),
+        (ROOT/'recharge/member_benefits_runtime/wheel_node.mjs','recharge/member_benefits_runtime'),
+        (ROOT/'recharge/member_benefits_runtime/assets','recharge/member_benefits_runtime/assets'),
         (activity_resources,'activities'),
         (ROOT/'recharge/node_modules/playwright-core','recharge/node_modules/playwright-core'),
+        (ROOT/'recharge/node_modules/@napi-rs/canvas','recharge/node_modules/@napi-rs/canvas'),
+        (ROOT/'recharge/node_modules/@napi-rs/canvas-win32-x64-msvc','recharge/node_modules/@napi-rs/canvas-win32-x64-msvc'),
         (notice_dir,'third-party-notices')]
     for source,dest in resources:command+=['--add-data',str(source)+':'+dest]
     command+=['--add-data',str(extracted['node']/'node.exe')+':runtime/node',str(ROOT/'desktop.py')]

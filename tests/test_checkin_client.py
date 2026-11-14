@@ -28,7 +28,10 @@ class ProtocolSession:
         self.stock, self.claimed = 1, False
         self.identity = {'mobile': SNAPSHOT['phone'], 'channel': 'app'}
         self.today_status = None
+        self.flash_title, self.prize_name, self.start_time = '', '2元话费券', NOW
+        self.other_zones = []
         self.end_time = NOW+3600000
+        self.team_state = 0
 
     def get(self, url, **kwargs):
         self.calls.append(('GET', url, kwargs))
@@ -51,14 +54,20 @@ class ProtocolSession:
             data = {'markstatus': [{'date': '20261029', 'status': self.today_status or ('1' if self.signed else '0')}],
                     'userinfo': {'accumulateTimes': 1 if self.signed else 0}}
         elif path == 'markSeckill/secConfig':
-            data = {'secKillData': {'secKillZones': [{'id': 123, 'startTime': NOW, 'endTime': self.end_time,
-                    'prize': {'id': 456, 'name': '2元话费券', 'leaveStock': self.stock, 'status': '1' if self.claimed else '0'}}]}}
+            data = {'secKillData': {'mainTitle': self.flash_title,
+                    'secKillZones': [*self.other_zones, {'id': 123, 'startTime': self.start_time, 'endTime': self.end_time,
+                    'prize': {'id': 456, 'name': self.prize_name, 'leaveStock': self.stock, 'status': '1' if self.claimed else '0'}}]}}
         elif path == 'mark31/domark':
             self.signed = True
             data = {'markPrize': {'name': '100MB流量日包券'}}
         elif path == 'markSeckill/redeem':
             self.claimed = True
             data = {}
+        elif path == 'groupmark/status':
+            data = {'status': self.team_state}
+        elif path == 'groupmark/award':
+            self.team_state = 4
+            data = {'myPrize': {'name': '5元话费券'}}
         else:
             raise AssertionError(path)
         return Response({'code': 'SUCCESS', 'data': data})
@@ -231,6 +240,51 @@ class CheckinProtocolTests(unittest.TestCase):
         with self.assertRaises(CheckinError):
             self.client(session).flash('a-purchase')
         self.assertEqual(session.calls, [])
+
+    def test_weekly_coupon_is_only_available_at_its_official_time(self):
+        session = ProtocolSession(now=NOW-1800000)
+        session.flash_title, session.prize_name = '每周秒杀 限抢1次', '1元话费券'
+        session.start_time = NOW-600000
+        # A claimed weekly coupon from the previous week cannot block this week.
+        session.other_zones = [{'id': 9, 'startTime': NOW-7*86400000, 'endTime': NOW-7*86400000+600000,
+                                'prize': {'id': 9, 'name': '1元话费券', 'status': '1', 'leaveStock': 0}}]
+        client = self.client(session)
+        preview = client.inspect()
+        self.assertEqual(preview['flash_kind'], 'weekly')
+        self.assertEqual(preview['flash_next_at'], '2026-10-29T11:50:00+08:00')
+        self.assertEqual(preview['products'][0]['name'], '1元话费券')
+        self.assertFalse(client.flash(FLASH_PRODUCT)['submitted'])
+        self.assertEqual(self.mutations(session), [])
+        session.now = session.start_time
+        self.assertTrue(client.flash(FLASH_PRODUCT)['submitted'])
+        self.assertEqual(self.mutations(session)[0][2], {'secId': '123', 'prizeId': 456})
+
+    def test_weekly_claim_record_prevents_redeeming_another_session_that_week(self):
+        session = ProtocolSession()
+        session.flash_title, session.prize_name = '每周秒杀', '1元话费券'
+        result = self.client(session).flash(FLASH_PRODUCT, claimed_periods={'weekly': '2026-10-26'})
+        self.assertEqual(result['flash_state'], 'already_claimed')
+        self.assertEqual(self.mutations(session), [])
+
+    def test_weekly_title_never_uses_a_monthly_coupon(self):
+        session = ProtocolSession()
+        session.flash_title = '每周秒杀'
+        result = self.client(session).flash(FLASH_PRODUCT)
+        self.assertFalse(result['submitted'])
+        self.assertEqual(self.mutations(session), [])
+
+    def test_team_award_checks_readiness_and_submits_once(self):
+        session = ProtocolSession()
+        client, before = self.client(session), Mock()
+        self.assertEqual(client.team_award(before_submit=before), (0, ''))
+        before.assert_not_called()
+        session.team_state = 3
+        self.assertEqual(client.team_award(before_submit=before, check_only=True), (3, ''))
+        before.assert_not_called()
+        self.assertEqual(client.team_award(before_submit=before), (4, '5元话费券'))
+        self.assertEqual(client.team_award(before_submit=before), (4, ''))
+        before.assert_called_once()
+        self.assertEqual([call[2] for call in session.calls if call[1].endswith('/groupmark/award')], [{}])
 
 
 class PreparedFlashTests(unittest.TestCase):

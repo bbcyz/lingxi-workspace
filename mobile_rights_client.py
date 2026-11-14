@@ -19,11 +19,11 @@ class RightsClient:
         self.now = now or (lambda:datetime.now(SHANGHAI))
         self.lock,self.orders = Lock(),{}
 
-    def query(self, tracked=()):
+    def query(self, tracked=(), *, update_actions=True):
         if not self.lock.acquire(blocking=False):
             raise MobileRightsError('权益查询或领取正在进行，请稍候。','RIGHTS_BUSY',409)
         try:
-            self.orders={}
+            if update_actions:self.orders={}
             nonce=f'{random.random():.16f}'
             items,orders,seen,warnings = [],{},set(),[]
             month=self.now().strftime('%Y-%m');complete=False
@@ -61,7 +61,7 @@ class RightsClient:
                     item={'id':action,'order_no':order_id,'name':row['rightName'],
                           'order_time':moment.isoformat(),'phone_masked':self.phone[:3]+'****'+self.phone[-4:],
                           'status_code':status,'status':STATES.get(status,'官方状态 '+status),
-                          'can_claim':available,'tracked':row['rightName'] in tracked,'note':''}
+                          'can_claim':available,'tracked':row['rightName'] in tracked,'can_remove':False,'note':''}
                     if prior and status=='5':
                         item.update(status='领取成功，等待状态更新' if prior.get('status')=='success' else '领取结果待核实',note=prior.get('message') or '已提交，请核对官方进度，不会重复领取。')
                     if available:orders[action]=order_id
@@ -73,8 +73,9 @@ class RightsClient:
             for name in tracked:
                 if name not in names:
                     items.append({'id':None,'order_no':'','name':name,'order_time':None,'phone_masked':self.phone[:3]+'****'+self.phone[-4:],
-                                  'status_code':'','status':'本月未发放' if complete else '待核对','can_claim':False,'tracked':True,'note':''})
-            self.orders=orders
+                                  'status_code':'','status':'本月未发放' if complete else '待核对','can_claim':False,
+                                  'tracked':True,'can_remove':complete,'note':''})
+            if update_actions:self.orders=orders
             return {'items':items,'month':month,'warnings':warnings,'complete':complete,'queried_at':self.now().isoformat()}
         finally:self.lock.release()
 

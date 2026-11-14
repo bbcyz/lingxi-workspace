@@ -565,6 +565,42 @@ class CouponUseTests(unittest.TestCase):
         with self.assertRaises(CouponUseError) as caught:self.manager.sms(preview['operation_id'])
         self.assertEqual(caught.exception.code,'OPERATION_EXPIRED')
 
+    def test_recharge_auth_rejection_before_order_releases_preview_and_requires_fresh_confirmation(self):
+        self.env.recharge()
+        preview = self.prepare()
+        operation = self.manager.operations[preview['operation_id']]
+        operation.client._credential_binding = object()
+        self.manager.credential_cache = Mock()
+        operation.client.post = Mock(return_value=Response({'retCode': '500003'}))
+
+        with self.assertRaises(CouponUseError) as caught:
+            self.manager.confirm(operation.id, charge_amount='30')
+        self.assertEqual(caught.exception.code, '500003')
+        self.manager.credential_cache.invalidate.assert_called_once_with(operation.client)
+        self.assertTrue(self.env.sessions[0].closed)
+        self.assertFalse(self.manager.busy_login(LOGIN))
+        self.assertEqual(self.storage.writes, [])
+        self.assertEqual(self.env.final_calls, [])
+
+        self.env.snapshot.update(cookie='JSESSIONID=renewed; UID=private_app_uid', credential_revision=2)
+        fresh = self.prepare()
+        self.assertNotEqual(fresh['operation_id'], operation.id)
+        self.assertEqual(self.env.final_calls, [])
+        self.assertEqual(self.manager.confirm(fresh['operation_id'], charge_amount='30')['state'], 'payment_required')
+        self.assertEqual(len(self.env.final_calls), 1)
+
+    def test_sms_rejection_releases_expired_wallet_but_wrong_code_keeps_it_bound(self):
+        preview = self.prepare()
+        operation = self.manager.operations[preview['operation_id']]
+        self.manager.sms(operation.id)
+        operation.client.post = Mock(side_effect=[Response({'retCode': '510003'}), Response({'retCode': '500003'})])
+        for code, busy in (('510003', True), ('500003', False)):
+            with self.assertRaises(CouponUseError) as caught:
+                self.manager.confirm(operation.id, sms_code='123456', prepare_risk=True)
+            self.assertEqual(caught.exception.code, code)
+            self.assertEqual(self.manager.busy_login(LOGIN, discard_previews=True), busy)
+        self.assertEqual(self.env.final_calls, [])
+
     def test_opening_the_same_coupon_in_another_tab_keeps_the_pending_sms_session(self):
         self.env.rights()
         preview = self.prepare()

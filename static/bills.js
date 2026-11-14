@@ -521,7 +521,7 @@
   $('bills-next').addEventListener('click',()=>changeMonth(months[months.indexOf(month)-1]));
   $('bills-expand').addEventListener('click',()=>{expandItems(bill.items);(bill.sections||[]).forEach((section,index)=>expandItems(section.items,`section-${index}.`));render();});
   $('bills-collapse').addEventListener('click',()=>{expanded.clear();render();});
-  function openAccountManager(){window.dispatchEvent(new CustomEvent('open-account-manager',{detail:{loginId,message:'请恢复当前账号登录，完成后将继续查询余量、账单和已订业务。'}}));}
+  function openAccountManager(){window.dispatchEvent(new CustomEvent('open-account-manager',{detail:{loginId,reloginId:loginId}}));}
   $('bills-relogin').addEventListener('click',openAccountManager);
   $('usage-relogin').addEventListener('click',openAccountManager);
   $('services-relogin').addEventListener('click',openAccountManager);

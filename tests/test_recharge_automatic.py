@@ -30,8 +30,9 @@ class Client:
         self.uncertain=False
         return {'authenticated':True,'device_ready':True,'start_hour':8,'server_time':self.owner.now.isoformat(),
                 'rd_status':4 if self.done else 1,'prize':{'name':'fixture'} if self.done else None}
-    def claim(self,**kwargs):
+    def claim(self,*,before_submit=None,**kwargs):
         if self.done:raise ActivityError('本场已有结果','ROUND_COMPLETED',409,retryable=False)
+        if before_submit is not None:before_submit()
         self.writes+=1;self.total_submissions+=1
         if self.failures:
             self.failures-=1
@@ -209,6 +210,65 @@ class AutomaticWednesdayTests(unittest.TestCase):
         self.assertEqual(account.client.writes,0)
         self.assertEqual(restored.jobs[account.id]['state'],'completed')
         self.assertFalse(restored.jobs[account.id]['uncertain'])
+
+    def test_same_day_restart_only_uses_remaining_submissions(self):
+        self.sync()
+        account = self.account()
+        self.now = self.now.replace(hour=8, minute=1, second=0)
+        self.scheduler._update(account.id, state='running', attempts=30, submissions=19,
+                               message='发起第 19/20 次领取', log=True)
+        account.client.failures = 2
+        restored = ClaimScheduler(self.manager, storage=self.path, now=lambda:self.now)
+        restored.configure_automatic(lambda:deepcopy(self.pool), self.scheduler.ensure_shared_account, self.prepare)
+        restored.sync_automatic()
+        restored._worker(account.id, self.now.replace(minute=0), Event())
+        job = restored.jobs[account.id]
+        self.assertEqual(account.client.writes, 1)
+        self.assertEqual((job['state'], job['attempts'], job['submissions']), ('exhausted', 31, 20))
+        self.assertEqual(job['next_run_at'], '2026-11-04T08:00:00+08:00')
+
+    def test_manual_claim_requires_wednesday_opening(self):
+        self.sync()
+        for now in (self.now, self.now + timedelta(days=1, hours=2)):
+            self.now = now
+            with patch('recharge.scheduler.threading.Thread') as thread:
+                result = self.http.post('/api/schedules/run-now', headers=self.headers,
+                                        json={'account_ids':[self.account().id]})
+                self.assertEqual(result.status_code, 409)
+                self.assertEqual(result.json['code'], 'ROUND_NOT_OPEN')
+                thread.assert_not_called()
+
+    def test_manual_claim_resumes_legacy_quota_and_skips_ineligible_jobs(self):
+        self.now = self.now.replace(hour=9, minute=0, second=0)
+        self.pool.extend({'id':key,'name':key,'phone_masked':'138****0003','status':'active'}
+                         for key in ('claimed', 'exhausted', 'stopped'))
+        self.sync()
+        account = self.account()
+        week = self.now.date().isoformat()
+        next_run = (self.now.replace(hour=8)+timedelta(days=7)).isoformat()
+        self.scheduler._update(account.id, state='exhausted', completed_week=week,
+                               next_run_at=next_run, attempts=20, submissions=8,
+                               message='已达 20 轮上限：当前活动太火爆', log=True)
+        for key, state, submissions in [('claimed','success',3),('exhausted','exhausted',20)]:
+            self.scheduler._update(self.account(key).id,state=state,completed_week=week,
+                                   next_run_at=next_run,submissions=submissions)
+        self.scheduler.cancel([self.account('stopped').id])
+        ids = [account.id, self.account('claimed').id, self.account('exhausted').id, self.account('stopped').id]
+        with patch('recharge.scheduler.threading.Thread') as thread:
+            response = self.http.post('/api/schedules/run-now',json={'account_ids':ids},headers=self.headers)
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(response.json['started'],[account.id])
+            self.assertEqual([item['account_id'] for item in response.json['skipped']],ids[1:])
+            repeated = self.http.post('/api/schedules/run-now',json={'account_ids':[account.id]},headers=self.headers)
+            self.assertEqual(repeated.json['started'],[])
+            thread.assert_called_once()
+            _, target, _ = thread.call_args.kwargs['args']
+        account.client.failures = 20
+        self.scheduler._worker(account.id,target,Event())
+        job = self.scheduler.jobs[account.id]
+        self.assertEqual(account.client.writes,12)
+        self.assertEqual((job['attempts'],job['submissions']),(32,20))
+        self.assertEqual(job['next_run_at'],next_run)
 
     def test_one_page_has_both_tabs_no_manual_time_or_account_selection_form(self):
         page=self.http.get('/').text

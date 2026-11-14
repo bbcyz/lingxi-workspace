@@ -19,16 +19,21 @@ class CouponReminderTests(unittest.TestCase):
         self.reminders = CouponReminders(self.storage)
 
     def observe(self, rows, quote=None, owner=LOGIN, state='available'):
-        self.reminders.observe(owner, [_item(row) for row in rows], rows,
+        items = [_item(row) for row in rows]
+        self.reminders.observe(owner, items, rows,
             state=state, quote=quote or Mock(side_effect=AssertionError('unexpected pricing query')))
+        return items
 
     def summary(self, submissions=None):
         return self.reminders.summary([LOGIN], submissions or {}, NOW)
 
-    def test_all_available_fee_exchange_amounts_and_versions_count_but_flow_does_not(self):
+    def test_all_available_fee_exchange_amounts_and_versions_count_without_flow_or_other(self):
         rows = [{**ROW, 'pcardId':str(i), 'pCardNo':str(i), 'cardVersion':version,
                  'couponValue':amount} for i,(version,amount) in enumerate([('1','0.5'),('2','2'),('2','10')])]
         rows.append({**ROW, 'pcardId':'flow', 'pCardNo':'flow', 'busiType':'qy01', 'provPcardType':'ll01'})
+        rows.append({**ROW, 'pcardId':'flow-direct', 'pCardNo':'flow-direct', 'busiType':'ll01', 'provPcardType':'ll01'})
+        rows.append({**ROW, 'pcardId':'flow-province', 'pCardNo':'flow-province', 'busiType':'hf01', 'provPcardType':'ll01'})
+        rows.append({**ROW, 'pcardId':'other-province', 'pCardNo':'other-province', 'busiType':'hf01', 'provPcardType':'other'})
         rows.append({**ROW, 'pcardId':'future', 'pCardNo':'future', 'timeFlag':'2'})
         self.observe(rows)
         self.assertEqual(self.summary()['total'], 3)
@@ -40,17 +45,23 @@ class CouponReminderTests(unittest.TestCase):
         for label, payment, credit, expected in cases:
             with self.subTest(label=label):
                 row = {**ROW, 'pCardType':'001', 'pcardId':label, 'pCardNo':label}
-                self.observe([row], Mock(return_value={'payment':payment,'credit':credit}))
+                items = self.observe([row], Mock(return_value={'payment':payment,'credit':credit}))
                 self.assertEqual(self.summary()['total'], int(expected))
+                self.assertIs(items[0]['worth_recharging'], expected)
 
     def test_quote_is_reused_for_duplicate_rows_refresh_and_restart_without_private_coupon_codes(self):
         row = {**ROW, 'pCardType':'001'}
         quote = Mock(return_value={'payment':'18.00','credit':'20.00'})
         self.observe([row, row], quote)
-        self.observe([row], quote)
+        items = self.observe([row], quote)
+        self.assertTrue(items[0]['worth_recharging'])
         quote.assert_called_once()
         reloaded = CouponReminders(self.storage)
         self.assertEqual(reloaded.summary([LOGIN], {}, NOW)['total'], 1)
+        items = [_item(row)]
+        reloaded.observe(LOGIN, items, [row], state='available', quote=quote)
+        self.assertTrue(items[0]['worth_recharging'])
+        quote.assert_called_once()
         self.assertNotIn(ROW['pCardNo'], json.dumps(self.storage.activities[SCOPE]))
         self.assertNotIn('msg_id', json.dumps(self.storage.activities[SCOPE]))
 
@@ -98,6 +109,15 @@ class CouponReminderTests(unittest.TestCase):
         self.observe([ROW])
         self.reminders.forget(LOGIN)
         self.assertNotIn(LOGIN, CouponReminders(self.storage).data)
+
+    def test_recharge_tag_does_not_treat_fee_exchange_flow_or_unknown_price_as_discount(self):
+        rows = [ROW, {**ROW,'pCardNo':'flow','pcardId':'flow','busiType':'ll01','provPcardType':'ll01'},
+                {**ROW,'pCardNo':'future','pcardId':'future','timeFlag':'2','pCardType':'001'},
+                {**ROW,'pCardNo':'unknown','pcardId':'unknown','pCardType':'001'}]
+        quote = Mock(side_effect=CouponError('limited','-800',429))
+        items = self.observe(rows, quote)
+        self.assertTrue(all(item['worth_recharging'] is False for item in items))
+        quote.assert_called_once()
 
     def test_wallet_query_uses_official_amount_limits_and_only_reads_new_coupon_rules_once(self):
         env = Environment(self.storage)

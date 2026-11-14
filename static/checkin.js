@@ -1,6 +1,8 @@
 'use strict';
 const $=id=>document.getElementById(id);
-const kindNames={signin:'每日签到',flash:'月末秒杀'};
+const kindNames={signin:'每日签到',flash:'签到秒杀'};
+const flashNames={weekly:'每周秒杀',monthly:'月末秒杀'};
+const taskName=task=>flashNames[task.flash_kind]||kindNames[task.kind]||task.kind;
 const accountStateNames={login_required:'需重新登录',restoring:'正在恢复',retry:'等待重连'};
 const stateNames={waiting:'待执行',preparing:'准备中',running:'执行中',receiving:'接收结果',stopping:'正在停止',success:'已完成',completed:'已完成',signed:'今日已签到',already_signed:'今日已签到',unsigned:'今日未签到',not_signed:'今日未签到',pending:'今日未签到',unknown:'未查询',not_configured:'未配置',skipped:'本次未参与',available:'当前可参与',already_claimed:'本月已领取',unavailable:'暂不可参与',failed:'执行失败',error:'执行失败',cancelled:'已停止',stopped:'已停止',login_required:'需要重新登录',retry:'等待重试',interrupted:'已中断'};
 const activeStates=new Set(['preparing','running','receiving','stopping']);
@@ -14,9 +16,9 @@ async function api(path,payload){
   const data=await response.json();if(!response.ok)throw new Error(data.error||'操作未完成，请重试。');return data;
 }
 function feedback(message,success=false){$('checkin-feedback').textContent=message;$('checkin-feedback').hidden=!message;$('checkin-feedback').classList.toggle('success',success);}
-function badge(state){
+function badge(state,label=stateNames[state]||state){
   const tone=activeStates.has(state)?'active':['success','completed','signed','already_signed','already_claimed'].includes(state)?'success':['failed','error','login_required','interrupted'].includes(state)?'error':['waiting','retry','available'].includes(state)?'waiting':'ended';
-  return node('span','checkin-badge '+tone,stateNames[state]||state);
+  return node('span','checkin-badge '+tone,label);
 }
 function stoppable(task){return task.enabled||activeStates.has(task.state);}
 function visibleTasks(){const query=$('checkin-search').value.trim().toLocaleLowerCase();return model.tasks.filter(task=>(filter==='all'||task.kind===filter)&&`${task.account_name} ${task.phone_masked}`.toLocaleLowerCase().includes(query));}
@@ -43,7 +45,12 @@ function renderAccounts(){
     automatic.append(node('span','checkin-badge '+(account.signin_enabled?'success':'ended'),account.signin_enabled===true?'已开启':account.signin_enabled===false?'未开启':'未读取'));
     const signTask=model.tasks.find(task=>task.login_id===account.id&&task.kind==='signin'&&task.enabled);
     if(signTask?.next_run_at)automatic.append(node('small','','下次 '+dateFormat(signTask.next_run_at)));
-    flash.append(badge(account.flash_state||'unknown'),node('small','',account.flash_enabled===true?'每天 12:00 自动尝试':account.flash_enabled===false?'自动秒杀未开启':'自动设置未读取'));
+    const flashTask=model.tasks.find(task=>task.login_id===account.id&&task.kind==='flash');
+    const claimedLabel=account.flash_state==='already_claimed'&&account.flash_kind==='weekly'?'本周已领取':undefined;
+    if(account.flash_kind)flash.append(node('strong','',flashNames[account.flash_kind]));
+    flash.append(badge(account.flash_state||'unknown',claimedLabel));
+    if(flashTask?.enabled&&flashTask.next_run_at)flash.append(node('small','','下次检查 '+dateFormat(flashTask.next_run_at)));
+    else if(account.flash_enabled===false)flash.append(node('small','','自动秒杀未开启'));
     if(account.flash_message){const message=node('p','checkin-task-message checkin-account-result',account.flash_message);message.title=account.flash_message;flash.append(message);}
     const actions=node('div','checkin-row-actions');
     const sign=node('button','secondary','签到');sign.type='button';sign.disabled=working||account.status!=='active'||signedStates.has(todayState);sign.addEventListener('click',()=>openEditor(true,account.id));actions.append(sign);
@@ -71,6 +78,23 @@ function render(){
   for(const id of selectedTasks)if(!available.has(id))selectedTasks.delete(id);
   $('checkin-task-count').textContent=model.tasks.length;
   $('checkin-burst-summary').textContent=`默认单账号 ${model.settings?.burst_workers??8} 并发 · 各账号独立`;
+  const awardStatus=$('checkin-team-award-status');
+  if(awardStatus&&model.team_awards){
+    const {checking,claimed,unconfirmed}=model.team_awards;
+    awardStatus.textContent=`达标自动领奖 · 本月已领 ${claimed} 个账号`
+      +(checking?` · 正在检查 ${checking} 个`:'')
+      +(unconfirmed?` · ${unconfirmed} 个待核实`:'');
+  }
+  const flashKinds=[...new Set(model.accounts.map(account=>account.flash_kind).filter(Boolean))];
+  const flashTitle=flashKinds.length===1?flashNames[flashKinds[0]]:'签到秒杀';
+  const flashHeading=$('checkin-flash-title');
+  if(flashHeading){
+    flashHeading.textContent=flashTitle;
+    const nextFlash=model.accounts.map(account=>account.flash_next_at).filter(at=>Date.parse(at)>Date.parse(model.server_time)).sort()[0];
+    $('checkin-flash-schedule').textContent=(flashKinds.length===1&&flashKinds[0]==='weekly'?'1 元话费券 · 每周限抢 1 次。':'按官方场次执行。')
+      +(nextFlash?' 下场 '+dateFormat(nextFlash):'');
+  }
+  document.querySelector('[data-checkin-kind="flash"]').textContent=flashTitle;
   for(const [kind,id] of [['signin','checkin-sign-count'],['flash','checkin-flash-count']]){
     const count=new Set(model.tasks.filter(task=>task.kind===kind&&task.enabled).map(task=>task.login_id)).size;
     $(id).textContent=count?`已开启 ${count} 个账号`:'尚未配置';
@@ -78,10 +102,10 @@ function render(){
   const rows=shown.map(task=>{
     const row=node('tr'),selection=node('td','checkin-task-selection'),check=node('input');check.type='checkbox';
     check.checked=selectedTasks.has(task.id);check.disabled=!stoppable(task)||working;
-    check.setAttribute('aria-label',`选择 ${task.account_name} 的${kindNames[task.kind]||task.kind}任务`);
+    check.setAttribute('aria-label',`选择 ${task.account_name} 的${taskName(task)}任务`);
     check.addEventListener('change',()=>{if(check.checked)selectedTasks.add(task.id);else selectedTasks.delete(task.id);updateSelection();});selection.append(check);
     const account=node('td');account.append(node('strong','',task.account_name),node('small','',task.phone_masked));
-    const kind=node('td');kind.append(node('strong','',kindNames[task.kind]||task.kind),node('small','',task.kind==='flash'?'每天 12:00':'每天一次'));
+    const kind=node('td');kind.append(node('strong','',taskName(task)),node('small','',task.kind==='flash'?'按官方场次':'每天一次'));
     if(task.kind==='flash')kind.append(node('small','',`${task.burst_count??40} 次 · ${task.burst_interval??0.05} 秒`),node('small','',`单账号 ${task.burst_workers??8} 并发`));
     const time=node('td','checkin-task-time');time.append(node('time','',dateFormat(task.next_run_at).replace(' ','\n')));
     if(task.last_run_at)time.append(node('small','','上次 '+dateFormat(task.last_run_at)));
@@ -145,7 +169,7 @@ async function openEditor(asManual=false,loginId=''){
   $('checkin-product').replaceChildren(...products);
   const flashReady=model.products.some(product=>product.selectable===true);
   const config=model.automation;
-  if(!flashReady&&config?.product_id){const option=node('option','','月末2元话费券 · 执行时核对官方资格');option.value=config.product_id;$('checkin-product').append(option);}
+  if(!flashReady&&config?.product_id){const option=node('option','','官方秒杀券 · 自动识别场次');option.value=config.product_id;$('checkin-product').append(option);}
   $('checkin-flash-enabled').disabled=!flashReady&&!config?.product_id;$('checkin-flash-unavailable').hidden=flashReady||!!config?.product_id;
   if(!manual){
     $('checkin-signin-enabled').checked=config.signin_enabled;$('checkin-flash-enabled').checked=config.flash_enabled;
@@ -174,7 +198,7 @@ function renderHistory(){
     records=[...(task.history||[])].reverse();
   }
   const rows=records.map(record=>{
-    const row=node('article','checkin-history-item'),head=node('div');head.append(node('time','',(record.kind?(kindNames[record.kind]||record.kind)+' · ':'')+dateFormat(record.time)),badge(record.state));row.append(head,node('p','',record.message));
+    const row=node('article','checkin-history-item'),head=node('div');head.append(node('time','',(record.kind||record.flash_kind?taskName(record)+' · ':'')+dateFormat(record.time)),badge(record.state));row.append(head,node('p','',record.message));
     if(record.attempts?.length){
       const details=node('details','checkin-attempts'),table=node('table'),thead=node('thead'),titles=node('tr'),body=node('tbody');
       details.append(node('summary','',`查看 ${record.attempt_count} 次请求明细`));

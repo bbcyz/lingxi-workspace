@@ -21,10 +21,12 @@ class FakeClient:
         self.mode = 'cookie'
         self.operation_lock = threading.RLock()
         self.total_submissions = 0
+        self.uncertain = False
         self.clock_anchor = None
         self.current = NOW
         self.calls = 0
         self.failures = 0
+        self.check_failures = 0
         self.permanent = False
         self.barrier = None
         self.bridge = Mock()
@@ -43,7 +45,12 @@ class FakeClient:
     def identity(self):
         return self.refresh()
 
-    def claim(self, **kwargs):
+    def claim(self, *, before_submit=None, **kwargs):
+        if self.check_failures:
+            self.check_failures -= 1
+            raise ActivityError('资格查询繁忙', 'UPSTREAM_HTTP', 502)
+        if before_submit is not None:
+            before_submit()
         self.calls += 1
         self.total_submissions += 1
         self.draw_times.append(self.current)
@@ -103,16 +110,29 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(len(event.intervals), 2)
         self.assertFalse(job['enabled'])
 
-    def test_twenty_round_cap_and_interval_bounds(self):
+    def test_twenty_submissions_after_twelve_failed_checks(self):
+        self.client.check_failures = 12
         self.client.failures = 100
         self.arm()
         event = RecordingEvent()
         self.scheduler._run_attempts('default', event)
         self.assertEqual(self.client.calls, 20)
-        self.assertEqual(self.scheduler.snapshots()['default']['state'], 'exhausted')
-        self.assertEqual(len(event.intervals), 19)
+        job = self.scheduler.snapshots()['default']
+        self.assertEqual(job['state'], 'exhausted')
+        self.assertEqual((job['attempts'], job['submissions']), (32, 20))
+        self.assertEqual(len(event.intervals), 31)
         self.assertTrue(all(0.2 <= delay <= 1 for delay in event.intervals))
         self.assertGreater(len(set(event.intervals)), 1)
+
+    def test_prolonged_check_failures_wait_and_resume_until_a_successful_submission(self):
+        self.client.check_failures = 21
+        self.arm()
+        event = RecordingEvent()
+        self.scheduler._run_attempts('default', event)
+        job = self.scheduler.snapshots()['default']
+        self.assertEqual((job['state'], job['attempts'], job['submissions']), ('success', 22, 1))
+        self.assertEqual(self.client.calls, 1)
+        self.assertEqual(event.intervals[-2:], [60, 60])
 
     def test_cancel_interrupts_retry_wait(self):
         self.client.failures = 100

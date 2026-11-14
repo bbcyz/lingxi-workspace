@@ -10,7 +10,6 @@ import msvcrt
 import os
 from pathlib import Path
 import secrets
-import socket
 import threading
 from urllib.request import Request,urlopen
 
@@ -18,7 +17,7 @@ from urllib.request import Request,urlopen
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--data-dir',type=Path)
-    parser.add_argument('--port',type=int,default=5500)
+    parser.add_argument('--port',type=int)
     parser.add_argument('--headless',action='store_true',help='Run the local service without a window (verification).')
     parser.add_argument('--quit',action='store_true',help='Exit this user data directory\'s running client.')
     options=parser.parse_args()
@@ -55,11 +54,17 @@ def main():
     from network_access import create_http_server
     from desktop_browser import DefaultBrowserWindow,wait_for_page
     quit_event=threading.Event();token=secrets.token_urlsafe(32);icon=None
-    port=options.port
-    if port:
-        with socket.socket() as probe:
-            if probe.connect_ex(('127.0.0.1',port))==0:port=0
-    server=create_http_server(app,port)
+    def update_port(port):
+        updated={**instance,'port':port}
+        temporary=control_file.with_suffix('.tmp')
+        temporary.write_text(json.dumps(updated),'utf-8')
+        temporary.replace(control_file)
+        with window.condition:
+            window.url=f'http://127.0.0.1:{port}/?desktop=1'
+            window.pending_until=0
+            window.condition.notify_all()
+
+    server=create_http_server(app,options.port,fallback_if_occupied=True,on_port_changed=update_port)
     port=server.effective_port;url=f'http://127.0.0.1:{port}/?desktop=1'
     window=DefaultBrowserWindow(url)
 
@@ -72,13 +77,17 @@ def main():
         client_id=request.args.get('id','')
         if len(client_id)!=32 or any(char not in '0123456789abcdef' for char in client_id):
             return jsonify(error='窗口标识无效'),400
+        current_port=int(request.environ['SERVER_PORT'])
         def events():
             window.attach(client_id);revision=window.focus_revision
             try:
                 yield 'data: '+json.dumps({'focus':revision})+'\n\n'
-                while not quit_event.is_set():
+                while not quit_event.is_set() and current_port==server.effective_port:
                     with window.condition:
-                        window.condition.wait(timeout=10);revision=window.focus_revision
+                        window.condition.wait_for(lambda: revision!=window.focus_revision or
+                                                  current_port!=server.effective_port,timeout=10)
+                        revision=window.focus_revision
+                    if current_port!=server.effective_port:break
                     yield 'data: '+json.dumps({'focus':revision})+'\n\n'
             finally:window.detach(client_id)
         return Response(events(),mimetype='text/event-stream')

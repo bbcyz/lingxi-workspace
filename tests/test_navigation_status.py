@@ -61,6 +61,10 @@ class NavigationCountTests(unittest.TestCase):
         rows={str(i):{'login_id':'a','state':state} for i,state in enumerate([
             'accepted','closed','payment_required','submitted','unknown'])}
         self.assertEqual(self.count(coupons=rows)['/coupons'],1)
+        rows['flow']={'login_id':'a','state':'unknown','kind':'flow'}
+        rows['rights']={'login_id':'b','state':'uncertain','kind':'rights'}
+        rows['other']={'login_id':'a','state':'unknown','kind':'exchange','category':'other'}
+        self.assertEqual(self.count(coupons=rows)['/coupons'],1)
         rows['4']['state']='accepted'
         self.assertEqual(self.count(coupons=rows)['/coupons'],0)
 
@@ -122,6 +126,22 @@ class NavigationCountTests(unittest.TestCase):
         self.assertEqual(response.json['coupon_reminders']['accounts']['a']['unpriced'],1)
         self.assertEqual(response.json['counts']['/coupons'],0)
         self.assertNotIn('occupied',response.get_data(as_text=True))
+
+    def test_member_navigation_total_matches_the_per_account_counts(self):
+        app=Flask('member-counts')
+        available_counts=Mock(return_value={'a': 2, 'b': 1})
+        app.extensions['member_benefits']=SimpleNamespace(available_counts=available_counts)
+        platforms=SimpleNamespace(lock=RLock(),platforms={})
+        register_navigation_status(app,lambda:ACCOUNTS,{},platforms)
+        client=app.test_client()
+        result=client.get('/api/navigation/issues').json
+        self.assertEqual(result['counts']['/member-benefits'],3)
+        self.assertEqual(result['member_benefit_counts'],{'a': 2, 'b': 1})
+        available_counts.assert_called_once_with({'a', 'b'})
+        app.extensions['feature_control']=SimpleNamespace(enabled=lambda name: name!='member-benefits')
+        result=client.get('/api/navigation/issues').json
+        self.assertEqual(result['counts']['/member-benefits'],0)
+        self.assertEqual(result['member_benefit_counts'],{})
 
 
 if __name__ == '__main__':

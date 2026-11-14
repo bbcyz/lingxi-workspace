@@ -107,7 +107,8 @@ class PlatformManager:
                 row = {key: entry[key] for key in ('id', 'title', 'home', 'temporary', 'state', 'navigation')}
                 enabled = self.features is None or self.features.enabled(platform_id)
                 row.update(active=enabled and bool(meta.get('active')) and entry['state'] == 'running', enabled=enabled,
-                           end_at=meta.get('end_at'), server_time=self.now().isoformat())
+                           end_at=meta.get('end_at'), end_reason=meta.get('end_reason'),
+                           server_time=self.now().isoformat())
                 if entry['state'] == 'deleted':
                     row.update(deleted_at=self.registry[platform_id].get('deleted_at'),
                                removal_pending=entry['folder'].exists())

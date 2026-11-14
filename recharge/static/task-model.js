@@ -61,7 +61,7 @@
     if (!(settings.interval_min >= 0.2 && settings.interval_min <= settings.interval_max && settings.interval_max <= 1))
       return '间隔须在 0.2～1 秒内，最小间隔不能大于最大间隔。';
     if (!Number.isInteger(settings.max_attempts) || settings.max_attempts < 1 || settings.max_attempts > 20)
-      return '最多尝试次数须为 1～20 的整数。';
+      return '最多提交次数须为 1～20 的整数。';
     return '';
   }
 export {active, labels, group, status, stoppable, rows, counts, visible, beijingInput, nextWednesday, validate};

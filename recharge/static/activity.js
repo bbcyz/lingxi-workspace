@@ -97,7 +97,7 @@ function renderSchedule() {
     const date=new Date(job.next_run_at || job.run_at);
     $('next-date').textContent=date.toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai',month:'long',day:'numeric',weekday:'short'});
     $('next-time').textContent=date.toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,hour:'2-digit',minute:'2-digit'});
-    $('schedule-state').textContent=(live ? `${jobNames[job.state]} · ${job.attempts}/${job.max_attempts} 轮` : '已预约 · ' + (job.state==='waiting' ? '等待执行' : '上场'+(jobNames[job.state] || '已结束')));
+    $('schedule-state').textContent=(live ? `${jobNames[job.state]} · 提交 ${job.submissions||0}/${job.max_attempts} 次` : '已预约 · ' + (job.state==='waiting' ? '等待执行' : '上场'+(jobNames[job.state] || '已结束')));
   }
   const action=$('schedule-action');
   action.href=base+'/static/tasks.html?'+(job?.enabled ? (live ? 'detail=' : 'edit=') : 'create=1&account_id=')+encodeURIComponent(selectedId || '');

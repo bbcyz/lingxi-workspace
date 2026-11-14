@@ -17,7 +17,12 @@
       name.append(element('strong','',platform.title));
       if(platform.navigation==='checkin')name.append(element('small','','入口位于“签到有礼”内'));
       if(platform.state==='deleted'&&platform.deleted_at)name.append(element('small','',`移除于 ${date(platform.deleted_at)}`));
-      const state=document.createElement('td');state.append(element('span',`platforms-badge ${platform.enabled===false?'disabled':platform.state}`,platform.removal_pending?'已停止 · 待清理':platform.state==='running'&&platform.enabled===false?'已关闭':labels[platform.state]));
+      const soldOut=platform.state==='expired'&&platform.end_reason==='sold_out';
+      const state=document.createElement('td'),badge=element('span',`platforms-badge ${platform.enabled===false?'disabled':platform.state}`,platform.removal_pending?'已停止 · 待清理':soldOut?'红包已领完 · 已停止':platform.state==='running'&&platform.enabled===false?'已关闭':labels[platform.state]);
+      if(soldOut)badge.title='官方红包库存已耗尽，按活动规则打卡和夺宝同步提前结束。';
+      state.append(badge);
+      const endTime=element('td','platforms-time',date(platform.end_at));
+      if(soldOut)endTime.append(element('small','','计划截止时间'));
       const switchCell=element('td','platforms-switch-cell');
       if(platform.state==='running'){
         const label=element('label','platforms-feature-switch'),toggle=element('input');toggle.type='checkbox';toggle.checked=platform.enabled!==false;toggle.disabled=working;toggle.setAttribute('role','switch');toggle.setAttribute('aria-label',`启用${platform.title}`);
@@ -54,7 +59,7 @@
         }
         sortCell.append(controls);
       }else sortCell.append(element('span','platforms-muted','—'));
-      row.append(name,element('td','',platform.temporary?'短期活动':platform.can_delete===false?'常驻功能':'长期活动'),state,element('td','platforms-time',date(platform.end_at)),switchCell,sortCell,actions);return row;
+      row.append(name,element('td','',platform.temporary?'短期活动':platform.can_delete===false?'常驻功能':'长期活动'),state,endTime,switchCell,sortCell,actions);return row;
     });
     if(!rows.length){const row=document.createElement('tr'),cell=element('td','platforms-empty','暂无功能');cell.colSpan=7;row.append(cell);rows.push(row);}
     $('platforms-rows').replaceChildren(...rows);$('platforms-count').textContent=platforms.filter(item=>item.state!=='deleted').length;

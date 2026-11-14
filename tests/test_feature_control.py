@@ -1,4 +1,7 @@
 from copy import deepcopy
+from html import unescape
+import json
+import re
 from threading import Event, RLock
 from types import SimpleNamespace
 import unittest
@@ -62,6 +65,21 @@ class FeatureControlTests(unittest.TestCase):
         client.post('/api/features/order',json={'feature_ids':list(reversed(ids))})
         result=client.post('/api/features/order',json={'feature_ids':ids})
         self.assertEqual([row['id'] for row in result.json['features']],ids)
+
+    def test_page_starts_with_saved_navigation_including_activity_availability(self):
+        self.control.register('extra', '活动', '/extra', ('/extra',),
+                              platform={'state': 'running', 'metadata': {'active': False}})
+        client = self.app.test_client()
+        order = list(reversed(self.control.default_order()))
+        self.assertEqual(client.post('/api/features/order', json={'feature_ids': order}).status_code, 200)
+        self.control.set_enabled('star-day', False)
+        page = client.get('/star-day').get_data(as_text=True)
+        content = re.search(r'<meta name="workspace-features" content="([^"]*)">', page)
+        self.assertIsNotNone(content)
+        features = json.loads(unescape(content[1]))
+        self.assertEqual([row['id'] for row in features], order)
+        self.assertFalse(features[0]['active'])
+        self.assertFalse(next(row['enabled'] for row in features if row['id'] == 'star-day'))
 
     def test_new_modules_append_and_removed_modules_do_not_block_future_ordering(self):
         client=self.app.test_client();ids=self.control.default_order()

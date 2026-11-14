@@ -44,8 +44,10 @@ class MobileRightsManager:
             raise LoginStorageError('移动权益本机记录格式异常，已保留原数据。')
         self.data=saved or {'tracked':{},'attempts':{}}
 
-    def _save(self):
-        if self.storage:self.storage.save_activity_data('mobile-rights',self.data)
+    def _save(self, data=None):
+        if data is None:data=self.data
+        if self.storage:self.storage.save_activity_data('mobile-rights',data)
+        self.data=data
 
     def _snapshot(self, login_id):
         snapshot=self.credentials(login_id)
@@ -201,12 +203,30 @@ class MobileRightsManager:
     def point_claim(self,login_id,claim_id):
         return self.perform(login_id,'points',lambda context:context.points.claim(claim_id),write=True)
 
+    def track_many(self,login_id,names):
+        self._snapshot(login_id)
+        with self.lock:
+            tracked=self.data['tracked']
+            existing=tracked.get(login_id,[])
+            known=set(existing)
+            new_names=list(dict.fromkeys(name for name in names if name not in known))
+            updated=[*existing,*new_names]
+            if new_names:self._save({**self.data,'tracked':{**tracked,login_id:updated}})
+            return {'tracked':updated,'added':len(new_names)}
+
     def track(self,login_id,name,enabled):
+        if enabled:return {'tracked':self.track_many(login_id,[name])['tracked']}
         self._snapshot(login_id)
         with self.lock:
             names=list(self.data['tracked'].get(login_id,[]))
-            if enabled and name not in names:names.append(name)
-            if not enabled:names=[value for value in names if value!=name]
+            if name not in names:return {'tracked':names}
+        result=self.perform(login_id,'rights',lambda context:context.rights.query(update_actions=False))
+        if any(item['name']==name for item in result['items']):
+            raise MobileRightsError('本月已有该权益的官方订单，不能移除记录。','RIGHTS_ORDER_EXISTS',409)
+        if not result['complete']:
+            raise MobileRightsError('本月权益尚未查全，确认未发放后才能移除记录。','RIGHTS_QUERY_INCOMPLETE',409)
+        with self.lock:
+            names=[value for value in self.data['tracked'].get(login_id,[]) if value!=name]
             self.data['tracked'][login_id]=names;self._save()
             return {'tracked':names}
 
@@ -225,14 +245,20 @@ def register_mobile_rights(app,accounts,credentials,*,storage=None,cache=None,re
     def mobile_rights_action(operation):
         payload=request.get_json(silent=True)
         operations={'query':('login_id',),'claim':('login_id','id'),'youth-query':('login_id',),'youth-sms':('login_id','id'),
-                    'youth-claim':('login_id','id','code'),'points-query':('login_id',),'points-claim':('login_id','id'),'track':('login_id','name')}
+                    'youth-claim':('login_id','id','code'),'points-query':('login_id',),'points-claim':('login_id','id'),
+                    'track':('login_id',),'track-batch':('login_id',)}
         if operation not in operations:return jsonify(error='操作不存在。',code='NOT_FOUND'),404
         if not isinstance(payload,dict) or any(not isinstance(payload.get(key),str) or not payload[key].strip() for key in operations[operation]):
             return jsonify(error='请提供当前账号和有效操作参数。',code='INVALID_REQUEST'),400
         login_id=payload['login_id']
         if not any(account['id']==login_id for account in accounts()):return jsonify(error='请选择已有共享账号。',code='ACCOUNT_NOT_FOUND'),404
-        if operation=='track' and (len(payload['name'])>512 or any(ord(c)<32 for c in payload['name']) or type(payload.get('enabled')) is not bool):
-            return jsonify(error='请填写有效权益名称和记录状态。',code='INVALID_REQUEST'),400
+        if operation in ('track','track-batch'):
+            names=payload.get('names') if operation=='track-batch' else [payload.get('name')]
+            if (not isinstance(names,list) or not names or any(not isinstance(name,str) or not name.strip()
+                    or len(name)>512 or any(ord(c)<32 for c in name) for name in names)
+                    or operation=='track' and type(payload.get('enabled')) is not bool):
+                return jsonify(error='请填写有效权益名称和记录状态。',code='INVALID_REQUEST'),400
+            names=[name.strip() for name in names]
         try:
             if operation=='query':result=manager.query(login_id)
             elif operation=='claim':result=manager.claim(login_id,payload['id'])
@@ -241,7 +267,8 @@ def register_mobile_rights(app,accounts,credentials,*,storage=None,cache=None,re
             elif operation=='youth-claim':result=manager.youth_claim(login_id,payload['id'],payload['code'])
             elif operation=='points-query':result=manager.point_query(login_id)
             elif operation=='points-claim':result=manager.point_claim(login_id,payload['id'])
-            else:result=manager.track(login_id,payload['name'].strip(),payload['enabled'])
+            elif operation=='track-batch':result=manager.track_many(login_id,names)
+            else:result=manager.track(login_id,names[0],payload['enabled'])
             return jsonify(result)
         except MobileRightsError as error:
             message=re.sub(r'(?<!\d)(1[3-9]\d)\d{4}(\d{4})(?!\d)',r'\1****\2',str(error))

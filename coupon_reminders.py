@@ -53,8 +53,9 @@ class CouponReminders:
             observed = {} if state == 'available' else previous
             stopped = False
             for item, raw in zip(items, rows):
+                item['worth_recharging'] = False
                 coupon_id = item['id']
-                if item['status'] != 'available':
+                if item['status'] != 'available' or item['category'] != 'fee':
                     observed.pop(coupon_id, None)
                     continue
                 if str(raw.get('busiType')) != 'hf01':
@@ -84,6 +85,7 @@ class CouponReminders:
                             # A failed price lookup is unknown, not a cheap deal.
                             # Never initialize, send SMS or submit orders here.
                             stopped = error.status == 401 or error.code in ('RATE_LIMITED', '-800', '8053')
+                item['worth_recharging'] = entry['qualifies'] is True and entry.get('pricing') is not None
                 observed[coupon_id] = entry
             record = {'items': observed, 'checked_at': datetime.now(SHANGHAI).isoformat()}
             with self.lock:

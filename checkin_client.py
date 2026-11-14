@@ -7,7 +7,7 @@ The legacy /do/mark activity is deliberately not used for the APP calendar.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from queue import SimpleQueue
 import re
 import time
@@ -20,14 +20,16 @@ from recharge.cmcc import APP_UA, SHANGHAI, parse_server_time
 
 ENTRY = 'https://wx.10086.cn/qwhdhub/qwhdmark/1021122301'
 BASE = 'https://wx.10086.cn/qwhdhub/api/mark/'
-FLASH_PRODUCT = 'month-end-2yuan'
+FLASH_PRODUCT = 'official-flash'
+LEGACY_FLASH_PRODUCT = 'month-end-2yuan'
 READ_PATHS = {'user/info', 'info/commonInfo', 'mark31/markstatus',
-              'markSeckill/secConfig', 'markSeckill/todayMarkStatus'}
-WRITE_PATHS = {'mark31/domark', 'markSeckill/redeem'}
+              'markSeckill/secConfig', 'markSeckill/todayMarkStatus', 'groupmark/status'}
+WRITE_PATHS = {'mark31/domark', 'markSeckill/redeem', 'groupmark/joingroup', 'groupmark/award'}
 RESULT_MESSAGES = {
     'PRIZE_NO_STOCK': '本场奖品已抢完',
     'NOT_TIME_IN': '当前不在官方活动时间内',
     'PRIZE_LIMIT_DAY': '当天领取次数已用完',
+    'PRIZE_LIMIT_WEEK': '本周领取次数已用完',
     'PRIZE_LIMIT_MONTH': '当月领取次数已用完',
     'PRIZE_RESTRIC_LIMIT': '官方领取次数已达上限',
     'WORK_ORDER_RESTRIC_LIMIT': '官方限制本次参与',
@@ -58,11 +60,12 @@ def _data(response):
     return response.get('data')
 
 
-def _coupon(zone):
+def _coupon(zone, name):
     prize = zone.get('prize') or {}
     # This is the free coupon shown in the user's page, not a configurable
     # purchase endpoint. Future unrelated products are never auto-selected.
-    return (re.sub(r'\s+', '', str(prize.get('name', ''))) == '2元话费券'
+    return (re.sub(r'\s+', '', str(prize.get('name', ''))) == name
+            and zone.get('id') is not None
             and prize.get('id') is not None
             and not any(float(prize.get(key) or 0) > 0 for key in ('price', 'payAmount', 'pointsCost')))
 
@@ -74,6 +77,12 @@ def _zone_time(value):
 def _in_window(zone, now):
     start, end = _zone_time(zone.get('startTime')), _zone_time(zone.get('endTime'))
     return bool(start is not None and end is not None and start <= now < end)
+
+
+def flash_period(kind, now):
+    if kind == 'weekly':
+        return (now.date() - timedelta(days=now.weekday())).isoformat()
+    return now.strftime('%Y-%m')
 
 
 class CheckinClient:
@@ -226,28 +235,79 @@ class CheckinClient:
         count = month['userinfo'].get('accumulateTimes')
         count = int(count) if count is not None else None
         config = _data(self._post(client, 'markSeckill/secConfig'))
-        zones = (config or {}).get('secKillData', {}).get('secKillZones', []) if isinstance(config, dict) else []
-        eligible = [zone for zone in zones if _coupon(zone)]
-        open_zones = [zone for zone in eligible if _in_window(zone, now)]
-        claimed = any(str(zone['prize'].get('status')) == '1' for zone in eligible)
+        flash_config = (config.get('secKillData') or {}) if isinstance(config, dict) else {}
+        title = str(flash_config.get('mainTitle') or '')
+        kind = 'weekly' if '每周秒杀' in title else 'monthly' if not title or '月末秒杀' in title else ''
+        prize_name = '1元话费券' if kind == 'weekly' else '2元话费券'
+        eligible = [zone for zone in (flash_config.get('secKillZones') or []) if kind and _coupon(zone, prize_name)]
+        period = flash_period(kind, now)
+        current_zones = [zone for zone in eligible if (start := _zone_time(zone.get('startTime')))
+                         and flash_period(kind, start) == period]
+        open_zones = [zone for zone in current_zones if _in_window(zone, now)]
+        claimed = any(str(zone['prize'].get('status')) == '1' for zone in current_zones)
         stock = any(float(zone['prize'].get('leaveStock') or 0) > 0 for zone in open_zones)
         flash_state = 'already_claimed' if claimed else 'available' if stock and signed else 'unavailable'
-        flash_message = ('本月已领取' if claimed else '当前可参与' if stock and signed
+        flash_message = (('本周已领取' if kind == 'weekly' else '本月已领取') if claimed else '当前可参与' if stock and signed
                          else '先完成今日签到' if open_zones and not signed else '当前没有开放的秒杀场次')
-        products = [{'id': FLASH_PRODUCT, 'name': '2元话费券', 'cost': '免费',
+        upcoming = min((start for zone in eligible if (start := _zone_time(zone.get('startTime')))
+                        and start > now and _in_window(zone, start)
+                        and (not claimed or flash_period(kind, start) != period)), default=None)
+        products = [{'id': FLASH_PRODUCT, 'name': prize_name, 'cost': '免费',
                      'label': '免费领券 · 当日先签到 · 以官方活动时间和领取上限为准',
                      'selectable': True, 'available': bool(stock and signed and not claimed)}] if eligible else []
         return {'date': today, 'server_time': now.isoformat(),
                 'today_state': 'signed' if signed else 'unsigned', 'month_count': count,
                 'signin_message': '今日已签到' if signed else '今日尚未签到',
                 'flash_state': flash_state, 'flash_message': flash_message,
-                'products': products}, eligible
+                'flash_kind': kind if eligible else '', 'flash_period': period if eligible else '',
+                'flash_next_at': upcoming.isoformat() if upcoming else None,
+                'products': products}, current_zones
 
     def inspect(self):
         with self._session() as (client, snapshot):
             result, _ = self._inspect(client)
             self._current(snapshot)
             return result
+
+    def team_status(self):
+        with self._session() as (client, snapshot):
+            result = _data(self._post(client, 'groupmark/status'))
+            self._current(snapshot)
+            return result
+
+    def join_team(self, token, *, before_submit):
+        with self._session() as (client, snapshot):
+            status = _data(self._post(client, 'groupmark/status'))
+            if not status or str(status.get('status')) != '0':
+                raise CheckinError('官方状态已变化，该号码暂不可入团', 'HAVE_GROUP', 409)
+            response = self._post(client, 'groupmark/joingroup', {'token': token},
+                                  snapshot=snapshot, before_submit=before_submit)
+            if response.get('code') == 'SUCCESS':
+                return
+            code = str(response.get('status') or response.get('code') or '')
+            messages = {'HAVE_GROUP': '该号码本月已加入团队', 'FULL_GROUP': '目标团队已满员',
+                        'FINISH_GROUP': '目标团队已达标，官方不再接收入团',
+                        'YOURSELF_GROUP': '官方不允许加入自己的队伍', 'TOKEN_ERROR': '官方邀请已失效'}
+            raise CheckinError(messages.get(code, '官方未确认入团，请查询当前团队状态'),
+                               code if code in messages else 'TEAM_JOIN_UNCONFIRMED', 409,
+                               uncertain=code not in messages)
+
+    def team_award(self, *, before_submit, check_only=False):
+        with self._session() as (client, snapshot):
+            result = _data(self._post(client, 'groupmark/status'))
+            status = int(result['status']) if result else -1
+            if status == 3 and not check_only:
+                response = self._post(client, 'groupmark/award', snapshot=snapshot,
+                                      before_submit=before_submit)
+                if response.get('code') != 'SUCCESS':
+                    raise CheckinError('官方尚未确认组团奖励到账，等待状态核对',
+                                       'TEAM_AWARD_UNCONFIRMED', uncertain=True)
+                result = response.get('data') or {}
+                status = 4
+            else:
+                self._current(snapshot)
+            prize = ((result or {}).get('myPrize') or {}).get('name') or ''
+            return status, str(prize)
 
     def signin(self, *, before_submit=None):
         with self._session() as (client, snapshot):
@@ -267,20 +327,21 @@ class CheckinClient:
             code = str(response.get('status') or response.get('code') or 'UNKNOWN')
             return {**updated, 'state': 'failed', 'message': RESULT_MESSAGES.get(code, '官方尚未确认签到成功（'+code[:60]+'）'), 'submitted': True}
 
-    def flash(self, product_id, *, before_submit=None, burst=None, cancelled=None, target_at=None):
-        if product_id != FLASH_PRODUCT:
-            raise CheckinError('请选择已确认的月末2元话费券', 'INVALID_PRODUCT', 400)
+    def flash(self, product_id, *, before_submit=None, burst=None, cancelled=None, target_at=None, claimed_periods=None):
+        if product_id not in (FLASH_PRODUCT, LEGACY_FLASH_PRODUCT):
+            raise CheckinError('请选择签到有礼的官方秒杀场次', 'INVALID_PRODUCT', 400)
         if burst is not None:
             from checkin_flash import run_flash_burst
             with self._session() as (client, snapshot):
                 prepared = PreparedFlash(self, client, snapshot)
                 try:
-                    prepared.prepare(burst['burst_workers'], target_at)
+                    prepared.prepare(burst['burst_workers'], target_at, claimed_periods)
                     return run_flash_burst(prepared, burst, before_submit, cancelled or (lambda: False))
                 finally:
                     prepared.close()
         with self._session() as (client, snapshot):
             result, zones = self._inspect(client)
+            _keep_flash_claim(result, claimed_periods)
             if result['today_state'] != 'signed' or result['flash_state'] != 'available':
                 return {**result, 'state': 'skipped', 'message': result['flash_message'], 'submitted': False}
             now = datetime.fromisoformat(result['server_time'])
@@ -303,9 +364,10 @@ class PreparedFlash:
         self.owner, self.client, self.snapshot = owner, client, snapshot
         self.ready, self.sessions, self.available = False, [], SimpleQueue()
 
-    def prepare(self, workers, target_at):
+    def prepare(self, workers, target_at, claimed_periods=None):
         self.result, zones = self.owner._inspect(self.client)
         now = datetime.fromisoformat(self.result['server_time'])
+        _keep_flash_claim(self.result, claimed_periods)
         if self.result['today_state'] != 'signed':
             self.result['flash_message'] = '先完成今日签到，本轮未发送'
             return
@@ -364,8 +426,17 @@ class PreparedFlash:
 
     def reconcile(self):
         result, _ = self.owner._inspect(self.client)
+        if (result.get('flash_kind'), result.get('flash_period')) != (self.result.get('flash_kind'), self.result.get('flash_period')):
+            raise CheckinError('官方秒杀场次已更换，上一场结果待核实', 'FLASH_ROUND_CHANGED')
         return result
 
     def close(self):
         for worker in self.sessions:
             worker.close()
+
+
+def _keep_flash_claim(result, claimed_periods):
+    period = result.get('flash_period')
+    kind = result.get('flash_kind')
+    if period and claimed_periods and claimed_periods.get(kind) == period:
+        result.update(flash_state='already_claimed', flash_message='本周已领取' if kind == 'weekly' else '本月已领取')

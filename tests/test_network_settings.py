@@ -48,6 +48,18 @@ class NetworkSettingsTests(TestCase):
         self.assertEqual(value['ipv4'],['http://192.168.31.176:5500/'])
         self.assertEqual(value['ipv6'],['http://[2409:8a6a::1234]:5500/'])
 
+    def test_sidebar_uses_confirmed_listener_inventory_without_a_new_scan(self):
+        manager = NetworkSettings()
+        manager.plan([{'address': '192.0.2.10', 'family': 'ipv4', 'interface_id': 'nic',
+                       'interface_name': '示例网卡'}])
+        manager.attach(5500, [('0.0.0.0', 5500), ('::1', 5500)])
+        with patch('network_access.interface_addresses') as scan:
+            self.assertEqual(manager.sidebar(), {
+                'active': {'ipv4': True, 'ipv6': False},
+                'listening': {'ipv4': ['http://192.0.2.10:5500/'], 'ipv6': []},
+            })
+        scan.assert_not_called()
+
     def test_invalid_settings_and_environment_managed_listener_cannot_be_saved(self):
         manager = NetworkSettings()
         for value in ([],None,{'ipv4':'false','ipv6':True},{'ipv4':True},{'ipv4':True,'ipv6':True,'port':1}):

@@ -9,6 +9,7 @@
   <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/activities/{{ channel_id }}-checkin/static/web-checkin.js" defer></script>
   <link rel="stylesheet" href="/static/mobile.css?v=mobile-1">
   <script src="/static/mobile.js?v=mobile-1" defer></script>
+  {% include 'theme_head.html' %}
 </head>
 <body class="workspace-app" data-workspace="checkin" data-checkin-channel="{{ channel_id }}">
 <main class="portal-shell web-checkin-shell">

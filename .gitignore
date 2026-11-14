@@ -24,3 +24,4 @@ CREDENTIAL_REFRESH.md
 android/.gradle/
 android/local.properties
 android/**/build/
+recharge/member_benefits_runtime/.cache/

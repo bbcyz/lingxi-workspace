@@ -120,6 +120,36 @@ class AppLoginTests(unittest.TestCase):
             AppLoginSession.require_success({"retCode": "110001", "retDesc": "secret-account-data"}, "登录")
         self.assertNotIn("secret-account-data", str(failure.exception))
 
+    def test_medium_risk_stops_login_without_resubmitting_the_code_or_sending_sms(self):
+        flow = AppLoginSession(phone='19900000000',sms_sent_at=time.monotonic())
+        with patch.object(flow,'call',return_value=(200,{'retCode':'214100','retDesc':'private-account-detail'},{})) as call,patch.object(flow,'send_sms') as sms:
+            with self.assertRaises(AppLoginError) as failure:flow.login(flow.phone,'123456')
+            with self.assertRaises(AppLoginError) as blocked:flow.login(flow.phone,'123456')
+        self.assertIn('中风险',str(failure.exception))
+        self.assertIn('官方滑块',str(failure.exception))
+        self.assertNotIn('private-account-detail',str(failure.exception))
+        self.assertEqual(blocked.exception.code,'214100')
+        self.assertTrue(flow.sms_status(reused=True)['slider_required'])
+        self.assertFalse(flow.app_authenticated)
+        call.assert_called_once();sms.assert_not_called()
+        flow.sms_sent_at -= 61
+        flow.initialized_at = time.monotonic()
+        with patch.object(flow,'call',return_value=(200,{'retCode':'000000'},{})):
+            self.assertFalse(flow.send_sms('19900000000')['slider_required'])
+
+    def test_213010_reports_verification_failure_without_resending_sms(self):
+        flow = AppLoginSession(phone='19900000000', sms_sent_at=time.monotonic(), sms_request_id='batch')
+        with patch.object(flow, 'call', return_value=(200, {'retCode': '213010'}, {})) as call, \
+             patch.object(flow, 'send_sms') as sms:
+            with self.assertRaises(AppLoginError) as failure:
+                flow.login(flow.phone, '123456')
+        self.assertEqual(failure.exception.code, '213010')
+        self.assertIn('短信验证码校验未通过', str(failure.exception))
+        self.assertEqual(flow.sms_request_id, 'batch')
+        self.assertFalse(flow.app_authenticated)
+        call.assert_called_once()
+        sms.assert_not_called()
+
     def test_expired_auth_refresh_is_terminal_and_never_sends_sms(self):
         flow=AppLoginSession(phone='13800000000',cookie='JSESSIONID=fixture',xk='fixture',refresh_token='fixture-refresh')
         with patch.object(flow,'call',return_value=(200,{'retCode':'410000'},{})) as call,patch.object(flow,'send_sms') as sms:

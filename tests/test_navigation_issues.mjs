@@ -10,22 +10,45 @@ class Element {
   insertBefore(child,before) { const index=this.children.indexOf(before);if(index<0)this.children.push(child);else this.children.splice(index,0,child); }
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
-async function fixture(initial={'/seven-day':3},couponTotal=0) {
-  const items=[new Element('/seven-day'),new Element('/lingxi/tasks'),new Element('/lingxi/tasks'),new Element('accounts'),new Element('/coupons')];
-  const events={},timers=[],calls=[];
-  const document={hidden:false,getElementById:()=>({querySelectorAll:()=>items}),createElement:()=>new Element(),addEventListener:(name,fn)=>{events[name]=fn;}};
-  const control={counts:initial,couponTotal,ok:true,wait:null};
+async function fixture(initial={'/seven-day':3},couponTotal=0,memberPage=false) {
+  const items=[new Element('/seven-day'),new Element('/lingxi/tasks'),new Element('/lingxi/tasks'),new Element('accounts'),new Element('/coupons'),new Element('/member-benefits')];
+  const events={},timers=[],calls=[],dispatched=[];
+  const document={hidden:false,getElementById:id=>id==='workspace-navigation'?{querySelectorAll:()=>items}:memberPage?{}:null,
+    createElement:()=>new Element(),addEventListener:(name,fn)=>{events[name]=fn;}};
+  const control={counts:initial,couponTotal,memberCounts:{},ok:true,wait:null};
   const fetch=async(url,options)=>{
     calls.push({url,options});const counts={...control.counts},wait=control.wait;control.wait=null;
     if(wait)await wait;
-    return {ok:control.ok,json:async()=>({counts,coupon_reminders:{total:control.couponTotal}})};
+    return {ok:control.ok,json:async()=>({counts,coupon_reminders:{total:control.couponTotal},member_benefit_counts:control.memberCounts})};
   };
   vm.runInNewContext(fs.readFileSync(new URL('../static/navigation-issues.js',import.meta.url),'utf8'),{
-    document,window:{addEventListener:(name,fn)=>{events[name]=fn;}},fetch,setInterval:fn=>timers.push(fn),
+    document,window:{addEventListener:(name,fn)=>{events[name]=fn;},dispatchEvent:event=>dispatched.push(event)},
+    CustomEvent:class{constructor(type,{detail}){this.type=type;this.detail=detail;}},fetch,setInterval:fn=>timers.push(fn),
   });
-  await flush();return {items,events,timers,calls,control,document};
+  await flush();return {items,events,timers,calls,control,document,dispatched};
 }
 const badge=item=>item.querySelector('.workspace-issue-badge');
+
+test('the membership menu shows the available claim count and hides it at zero',async()=>{
+  const {items,control,events}=await fixture({'/member-benefits':4});
+  const benefits=items[5],count=benefits.querySelector('.workspace-coupon-badge');
+  assert.equal(count.hidden,false);
+  assert.equal(count.textContent,'4');
+  assert.match(count.attributes['aria-label'],/4 次会员权益可领取/);
+  assert.equal(badge(benefits),null);
+  control.counts={'/member-benefits':0};await events['member-benefits-changed']();
+  assert.equal(count.hidden,true);
+});
+
+test('the membership sidebar read also publishes per-account counts on the membership page',async()=>{
+  const {control,events,dispatched,calls}=await fixture({},0,true);
+  control.memberCounts={a:2,b:1};
+  await events['member-benefits-changed']();
+  const update=dispatched.at(-1);
+  assert.equal(update.type,'member-benefit-counts-updated');
+  assert.deepEqual(update.detail,{a:2,b:1});
+  assert.ok(calls.every(call=>call.url==='/api/navigation/issues'));
+});
 
 test('wallet useful coupon total updates independently of failure badges through a local-only read',async()=>{
   const {items,control,events,calls}=await fixture({'/coupons':1},14);

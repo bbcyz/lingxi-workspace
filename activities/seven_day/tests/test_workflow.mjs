@@ -33,7 +33,7 @@ async function fixture(){
   };
   vm.runInNewContext(fs.readFileSync(new URL('../static/seven-day.js',import.meta.url),'utf8'),{
     document:{getElementById:get,createElement:()=>new Element(),createTextNode:text=>Object.assign(new Element(),{textContent:text}),querySelectorAll:()=>[],hidden:false},
-    window:{addEventListener(){},dispatchEvent(){}},fetch,Date,setInterval(){},setTimeout(){},clearTimeout(){},requestAnimationFrame:fn=>fn(),
+    window:{addEventListener(){},dispatchEvent(){}},CustomEvent:class{constructor(type){this.type=type;}},fetch,Date,setInterval(){},setTimeout(){},clearTimeout(){},requestAnimationFrame:fn=>fn(),
   });
   await flush();return {get,model,calls,control};
 }
@@ -89,4 +89,15 @@ test('a rejected activity login offers account recovery even while the primary a
   const login=walk(get('seven-accounts'),'重新登录');
   assert.equal(login.dataset.accountRelogin,'a');
   assert.equal(calls.some(c=>c.body),false);
+});
+
+test('the activity explains sold-out early closure separately from its scheduled date',async()=>{
+  const {get,model,calls}=await fixture();
+  model.campaign={...model.campaign,active:false,ended:true,end_reason:'sold_out',sold_out:true};
+  await get('seven-refresh').click();await flush();
+  assert.equal(get('seven-ended-title').textContent,'红包已领完，活动提前结束');
+  assert.match(get('seven-ended-description').textContent,/打卡和夺宝同步停止/);
+  assert.match(get('seven-period').textContent,/计划至/);
+  assert.match(get('seven-expiry-note').textContent,/计划截止时间/);
+  assert.ok(calls.every(call=>!call.body));
 });

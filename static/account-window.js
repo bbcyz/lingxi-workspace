@@ -3,7 +3,15 @@ const accountChannel = typeof BroadcastChannel === 'function' ? new BroadcastCha
 const managerStyles = document.createElement('link');
 managerStyles.rel = 'stylesheet'; managerStyles.href = '/static/account-manager.css';
 document.head.append(managerStyles);
-let managerDialog, managerReady;
+let managerDialog, managerReady, sharedRelogin;
+let managerOpenSequence = 0;
+function finishSharedRelogin(account=null) {
+  const request=sharedRelogin;
+  if(!request||account&&request.id!==account.id)return;
+  sharedRelogin=null;
+  if(account&&managerDialog.open)managerDialog.close();
+  request.resolve(account);
+}
 function openAccountManager({reloginId = '', focusId = '', message = ''} = {}) {
   if (!managerDialog) {
     managerDialog = document.createElement('dialog');
@@ -14,7 +22,10 @@ function openAccountManager({reloginId = '', focusId = '', message = ''} = {}) {
     managerDialog.addEventListener('click', event => {
       if (event.target === managerDialog) managerDialog.close();
     });
-    managerDialog.addEventListener('close', () => window.dispatchEvent(new Event('accounts-changed')));
+    managerDialog.addEventListener('close', () => {
+      if(!managerDialog.open)finishSharedRelogin();
+      window.dispatchEvent(new Event('accounts-changed'));
+    });
     managerReady = Promise.all([
       fetch('/accounts').then(response => {
         if (!response.ok) throw new Error('账号管理加载失败，请刷新页面重试。');
@@ -32,17 +43,27 @@ function openAccountManager({reloginId = '', focusId = '', message = ''} = {}) {
       header.append(title, close);
       root.querySelector('.manager-intro').textContent = '所有功能共用账号，登录、修改备注和退出都在这里完成。';
       managerDialog.replaceChildren(root);
-      const manager = mountPortal(root, {manager: true, embedded: true});
+      const manager = mountPortal(root, {manager:true, embedded:true, onLogin:finishSharedRelogin,
+        onReloginCancel:id=>{if(sharedRelogin?.id===id)managerDialog.close();}});
       managerDialog.setAttribute('aria-labelledby', 'modal-account-manager-title');
       return manager;
     }).catch(error => { loading.textContent = error.message; });
   } else if (!reloginId && !focusId) {
     managerReady.then(manager => { if (manager) manager.refresh(); });
   }
-  managerDialog.showModal();
-  if (reloginId) managerReady.then(manager => { if (manager) manager.relogin(reloginId); });
-  else if (focusId) managerReady.then(manager => { if (manager) manager.focus(focusId, message); });
+  if(!managerDialog.open)managerDialog.showModal();
+  const sequence=++managerOpenSequence;
+  managerReady.then(manager=>{
+    if(!manager||!managerDialog.open||sequence!==managerOpenSequence)return;
+    if(reloginId)manager.relogin(reloginId);
+    else if(focusId)manager.focus(focusId,message);
+  });
 }
+window.requestSharedRelogin = id => new Promise(resolve=>{
+  finishSharedRelogin();
+  sharedRelogin={id,resolve};
+  openAccountManager({reloginId:id});
+});
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-account-window]');
   if (!button) return;
@@ -50,7 +71,7 @@ document.addEventListener('click', event => {
   openAccountManager({reloginId:button.dataset.accountRelogin});
 });
 window.addEventListener('open-account-manager', event => {
-  openAccountManager({focusId:event.detail.loginId, message:event.detail.message});
+  openAccountManager({reloginId:event.detail.reloginId,focusId:event.detail.loginId,message:event.detail.message});
 });
 window.publishAccountsChanged = () => {
   accountChannel?.postMessage({type: 'accounts-changed'});

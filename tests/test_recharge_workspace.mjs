@@ -15,7 +15,7 @@ class Element {
   click(){if(!this.disabled)return this.handlers.click?.();}
 }
 function find(node,text){if(node.textContent===text)return node;for(const child of node.children||[]){const found=find(child,text);if(found)return found;}return null;}
-async function fixture({running=false}={}){
+async function fixture({running=false,checkin,serverTime='2026-10-26T10:00:00+08:00'}={}){
   const elements=new Map(),calls=[],listeners={},get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   const filters=['all','scheduled','running','attention','ended'].map(v=>{const b=new Element('button');b.dataset.wedFilter=v;return b;});
   const pool=[{id:'a',name:'主号',phone_masked:'138****0001',status:'active'},{id:'b',name:'备用',phone_masked:'138****0002',status:'active'},{id:'c',name:'待登录',phone_masked:'138****0003',status:'login_required'}];
@@ -23,7 +23,19 @@ async function fixture({running=false}={}){
   const jobs=Object.fromEntries(pool.slice(0,2).map(a=>['activity-'+a.id,{account_id:'activity-'+a.id,managed:true,enabled:true,state:running?'armed':'waiting',weekly:true,next_run_at:'2026-10-28T08:00:00+08:00',run_at:'2026-10-28T08:00:00+08:00',max_attempts:20,attempts:0,submissions:0,message:'每周三自动执行',history:[],updated_at:'2026-10-26T10:00:00+08:00'}]));
   let url='http://localhost:5500/recharge/';
   const fetch=async(path,options)=>{const body=options?.body?JSON.parse(options.body):undefined;calls.push({path,body});let result;
-    if(path==='/recharge/api/accounts')result={accounts,logins:pool,jobs,server_time:'2026-10-26T10:00:00+08:00'};
+    if(path==='/recharge/api/accounts')result={accounts,logins:pool,jobs,checkin,server_time:serverTime};
+    else if(path==='/recharge/api/schedules/run-now'){
+      for(const id of body.account_ids)jobs[id].state='preparing';
+      result={started:body.account_ids,skipped:[]};
+    }
+    else if(path==='/recharge/api/checkin/run'){
+      const record=checkin.records[body.login_id]||{};
+      if(body.submit){
+        record.progress={date:'2026-10-26',month:'2026-10',action:'done',today_signed:true,status:'今日已打卡',message:'今日打卡已确认'};
+        checkin.records[body.login_id]=record;
+      }
+      result=record.progress||{action:'sign',message:'今日待打卡'};
+    }
     else if(path==='/recharge/api/login/attach')result={account_id:'activity-'+body.login_id};
     else if(path.startsWith('/recharge/api/prizes?'))result={prizes:[{prizeName:'fixture',sendStatus:'UNUSED'}]};
     else if(path==='/recharge/api/schedules/cancel'){for(const id of body.account_ids)jobs[id]={...jobs[id],skip_week:'2026-10-28',next_run_at:'2026-11-04T08:00:00+08:00'};result={message:'已停止'};}
@@ -51,6 +63,23 @@ test('activity and tasks are tabs on one page with no navigation or extra accoun
   assert.equal(url(),'http://localhost:5500/recharge/?tab=tasks');
   get('wed-tab-activity').click();assert.equal(get('wed-activity').hidden,false);
   assert.equal(calls.length,1);
+});
+test('saved prizes appear beside each account and progress counts submissions',async()=>{
+  const {get,calls,jobs}=await fixture();
+  Object.assign(jobs['activity-a'],{state:'success',message:'success',attempts:23,submissions:8,
+    result:{success:true,prizes:[{shortName:'5元',prizeName:'充值立减券',subTitle:'满30元及以上可用'}]}});
+  Object.assign(jobs['activity-b'],{state:'exhausted',message:'已达 20 次提交上限',attempts:32,submissions:20});
+  await get('wed-refresh').click();
+  const activityRows=get('wed-status-rows').children;
+  assert.ok(find(activityRows[0],'5元 充值立减券'));
+  assert.ok(find(activityRows[0],'满30元及以上可用'));
+  assert.ok(find(activityRows[1],'已达 20 次提交上限'));
+  get('wed-tab-tasks').click();
+  const progress=get('wed-task-rows').children[0].children[4];
+  assert.equal(progress.children[1].value,8);
+  assert.equal(progress.children[1].max,20);
+  assert.ok(find(progress,'检查 23 轮'));
+  assert.ok(calls.every(call=>call.path==='/recharge/api/accounts'));
 });
 test('account cards scope both tables and show the selected account prizes',async()=>{
   const {get,calls}=await fixture();
@@ -84,4 +113,45 @@ test('manual status queries stay disabled while automatic preparation is armed',
   const {get,calls}=await fixture({running:true});
   const read=find(get('wed-status-rows'),'查询资格');assert.equal(read.disabled,true);read.click();
   assert.equal(calls.length,1);
+});
+
+test('weekly claim button starts the selected accounts only during the open round',async()=>{
+  const closed=await fixture();
+  assert.equal(closed.get('wed-claim-now').disabled,true);
+  const {get,calls}=await fixture({serverTime:'2026-10-28T08:00:00+08:00'});
+  get('wed-accounts').children[1].click();
+  await new Promise(resolve=>setImmediate(resolve));
+  await get('wed-claim-now').click();
+  assert.deepEqual(calls.filter(call=>call.path.endsWith('/schedules/run-now')).map(call=>call.body),[{account_ids:['activity-a']}]);
+  assert.equal(get('wed-claim-now').disabled,true);
+  get('wed-accounts').children[0].click();
+  await get('wed-claim-now').click();
+  assert.deepEqual(calls.filter(call=>call.path.endsWith('/schedules/run-now')).map(call=>call.body),[
+    {account_ids:['activity-a']},{account_ids:['activity-b']},
+  ]);
+});
+
+test('manual check-in targets only eligible accounts even with automatic check-in disabled',async()=>{
+  const checkin={settings:{enabled:false,time:'00:01'},records:{
+    a:{progress:{date:'2026-10-26',month:'2026-10',action:'done',today_signed:true}},
+  },active:[]};
+  const {get,calls}=await fixture({checkin});
+  get('wed-tab-checkin').click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls.some(call=>call.body?.submit),false);
+  assert.equal(get('wed-checkin-sign').disabled,false);
+  await get('wed-checkin-sign').click();
+  assert.deepEqual(calls.filter(call=>call.body?.submit).map(call=>call.body),[{login_id:'b',submit:true}]);
+  assert.equal(get('wed-checkin-sign').disabled,true);
+  assert.equal(get('wed-feedback').textContent,'今日打卡已确认');
+});
+
+test('the toolbar sign-in follows the selected account',async()=>{
+  const {get,calls}=await fixture({checkin:{settings:{enabled:true,time:'00:01'},records:{},active:[]}});
+  get('wed-tab-checkin').click();
+  await new Promise(resolve=>setImmediate(resolve));
+  get('wed-accounts').children[1].click();
+  await new Promise(resolve=>setImmediate(resolve));
+  await get('wed-checkin-sign').click();
+  assert.deepEqual(calls.filter(call=>call.body?.submit).map(call=>call.body),[{login_id:'a',submit:true}]);
 });

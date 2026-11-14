@@ -32,6 +32,8 @@ from coupon_reminders import CouponReminders
 # The official recharge confirmation states payment must finish within 30 minutes.
 # This is the order's payment window, independent of coupon validity or login TTL.
 PAYMENT_WINDOW_SECONDS = 30*60
+WALLET_LOGIN_ERRORS = {'500003', 'COUPON_LOGIN_REQUIRED'}
+USE_RELOGIN_ERRORS = WALLET_LOGIN_ERRORS | {'APP_LOGIN_REQUIRED', 'APP_SESSION_EXPIRED', '531022'}
 
 
 class CouponUseError(CouponError):
@@ -159,8 +161,10 @@ class CouponUseManager:
                         self.payment_challenges.pop((row.get('login_id'),row.get('order_id')),None)
             if updated is not None:self._save(updated)
 
-    @staticmethod
-    def _close(operation):
+    def _close(self, operation, *, error=None):
+        if (error is not None and error.code in WALLET_LOGIN_ERRORS and self.credential_cache is not None
+                and hasattr(operation.client, '_credential_binding')):
+            self.credential_cache.invalidate(operation.client)
         if operation.context is not None:
             operation.context.__exit__(None, None, None)
             operation.context = None
@@ -177,13 +181,36 @@ class CouponUseManager:
                     finally:
                         operation.lock.release()
 
-    def busy_login(self, login_id):
-        """Keep a live wallet/SMS session stable until completion or expiry."""
+    def busy_login(self, login_id, *, discard_previews=False):
+        """Keep live verification stable. A manual relogin may discard idle previews."""
         with self.lock:
             now = time.monotonic()
-            return any(operation.login_id == login_id and operation.context is not None
-                       and operation.result is None and now < operation.expires
-                       for operation in self.operations.values())
+            for operation in self.operations.values():
+                if (operation.login_id != login_id or operation.context is None
+                        or operation.result is not None or now >= operation.expires):
+                    continue
+                if not discard_previews or not operation.lock.acquire(blocking=False):
+                    return True
+                try:
+                    if operation.context is None or operation.result is not None:
+                        continue
+                    if operation.serial or operation.sms_sent or operation.captcha_required or operation.sdk_bound:
+                        return True
+                    self._close(operation)
+                    operation.expires = 0
+                finally:
+                    operation.lock.release()
+            return False
+
+    @contextmanager
+    def _release_on_relogin(self, operation):
+        try:
+            yield
+        except CouponError as error:
+            if error.code in USE_RELOGIN_ERRORS:
+                self._close(operation, error=error)
+                operation.expires = 0
+            raise
 
     def query(self, login_id, *, state='available', page=1, sort='default'):
         """Do not reauthenticate a wallet while its coupon/SMS flow is live."""
@@ -218,10 +245,10 @@ class CouponUseManager:
                         result = client.query(state=state, page=page, sort=sort,
                             wallet_session=(operation.client, operation.user, operation.current), observe=observe)
                     except CouponError as error:
-                        if error.code != 'COUPON_LOGIN_REQUIRED':raise
+                        if error.code not in USE_RELOGIN_ERRORS:raise
                         # An official auth rejection means this OTP session is
                         # already invalid. Close it before the one read recovery.
-                        self._close(operation)
+                        self._close(operation, error=error)
                         operation.expires = 0
                         recovered = True
         if result is None:
@@ -404,7 +431,8 @@ class CouponUseManager:
             if time.monotonic() >= operation.expires:
                 self._close(operation)
                 raise CouponUseError('操作已超过十分钟，请重新选择卡券。', 'OPERATION_EXPIRED', 409)
-            yield operation
+            with self._release_on_relogin(operation):
+                yield operation
 
     @staticmethod
     def _post(operation, path, body, *, plain=False, gcm=False, submitting=False):
@@ -468,7 +496,7 @@ class CouponUseManager:
                             '510004': '验证码错误次数过多，请稍后重新获取。', '510006': '官方已限制短信验证，请在 APP 处理。',
                             '510005': '短信验证码重发次数过多，请稍后再试。', '510007': '操作过于频繁，请稍后再试。',
                             '531015': '下单操作频繁，请稍后再试（531015）。',
-                            '531022': '官方检测到充值环境异常（531022），本次未生成支付订单。可在当前窗口通过短信重新登录后重试；若仍失败，请切换网络再试。'}
+                            '531022': '官方检测到充值环境异常（531022），本次未生成支付订单。请在账号管理恢复登录，再核对用券条件。'}
                 message = messages.get(code, '官方拒绝此操作（'+code[:30]+'），本次未完成。')
                 if code in ('400010', '500002', '500004') and isinstance(value.get('retMsg'), str):
                     detail = value['retMsg']
@@ -592,7 +620,7 @@ class CouponUseManager:
                 return self._recheck_submission(login_id, coupon_id, key, record)
             retry_of = record['operation_id']
         if existing is not None and existing.key == key:
-            with existing.lock:
+            with existing.lock, self._release_on_relogin(existing):
                 if existing.context is not None and existing.result is None and time.monotonic() < existing.expires:
                     existing.current()
                     return deepcopy(existing.preview)
@@ -669,8 +697,8 @@ class CouponUseManager:
             with self.lock:
                 self.operations[operation.id] = operation
             return deepcopy(operation.preview)
-        except BaseException:
-            self._close(operation)
+        except BaseException as error:
+            self._close(operation, error=error if isinstance(error, CouponError) else None)
             raise
 
     def sms(self, operation_id):
@@ -850,17 +878,20 @@ class CouponUseManager:
                 attempts = list(prior.get('previous_attempts', [])) if prior else []
                 if prior:
                     attempts.append({name:prior.get(name) for name in ('operation_id','state','result','created_at')})
+                coupon = _item(row)
                 updated[operation.key] = {'state':'submitted', 'operation_id':operation.id, 'result':None,
-                    'login_id':operation.login_id, 'coupon_id':operation.coupon_id, 'coupon_name':_item(row)['name'],
+                    'login_id':operation.login_id, 'coupon_id':operation.coupon_id, 'coupon_name':coupon['name'],
+                    'category':coupon['category'],
                     'kind':operation.kind, 'created_at':time.time(), 'previous_attempts':attempts}
                 if operation.kind == 'recharge':
                     submitted_at = time.time()
                     updated[operation.key].update(login_id=operation.login_id, coupon_id=operation.coupon_id,
-                        coupon_name=_item(row)['name'],created_at=submitted_at,
+                        coupon_name=coupon['name'],created_at=submitted_at,
                         payment_expires_at=submitted_at+PAYMENT_WINDOW_SECONDS,
                         charge_amount=choice['payment'], credit_amount=choice['credit'])
                 self._save(updated)
             challenge = False
+            rejection = None
             try:
                 data = self._post(operation, path, body, plain=plain, submitting=True)
                 if operation.kind == 'recharge':
@@ -900,10 +931,11 @@ class CouponUseManager:
                     result = {'state': 'verification_required', 'verification': 'captcha',
                               'message': '请完成中国移动官方图形验证，再确认生成待支付订单。'}
                 else:
+                    rejection = error
                     result = {'state': 'failed', 'message': str(error), 'code': error.code}
             finally:
                 if not challenge:
-                    self._close(operation)
+                    self._close(operation, error=rejection)
             operation.captcha_required = challenge
             if not challenge:
                 operation.result = result

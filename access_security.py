@@ -93,7 +93,8 @@ class AccessSecurity:
 
 class AccessGate:
     PUBLIC = frozenset(('/access', '/api/access/status', '/api/access/login',
-                        '/api/access/logout', '/static/access.js', '/static/access.css', '/favicon.ico'))
+                        '/api/access/logout', '/static/access.js', '/static/access.css',
+                        '/static/theme.js', '/static/theme.css', '/favicon.ico'))
 
     def __init__(self, application, security):
         self.application, self.security = application, security

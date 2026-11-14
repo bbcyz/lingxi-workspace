@@ -77,10 +77,10 @@ import * as M from './task-model.js';
     plan.append(el('div', 'time-main', time(job.enabled ? job.next_run_at || job.run_at : job.run_at)));
     plan.append(el('small', '', M.active.has(job.state) ? '本次执行计划' : job.enabled ? (job.weekly ? '下次执行 · 每周三' : '单次预约') : '原计划 · ' + (job.weekly ? '每周重复已关闭' : '单次执行')));
     const progressCell = el('td'); progressCell.dataset.label = '执行进度';
-    progressCell.append(el('div', '', `${job.attempts || 0} / ${job.max_attempts} 轮`));
-    const track = el('div', 'progress-track'), progress = el('progress'); progress.max = job.max_attempts || 20; progress.value = job.attempts || 0;
-    progress.setAttribute('aria-label', `已尝试 ${job.attempts || 0} 轮，上限 ${job.max_attempts} 轮`); track.append(progress);
-    progressCell.append(track, el('small', '', `实际提交 ${job.submissions || 0} 次`));
+    progressCell.append(el('div', '', `${job.submissions || 0} / ${job.max_attempts} 次提交`));
+    const track = el('div', 'progress-track'), progress = el('progress'); progress.max = job.max_attempts || 20; progress.value = job.submissions || 0;
+    progress.setAttribute('aria-label', `领取提交 ${progress.value} 次，上限 ${progress.max} 次`); track.append(progress);
+    progressCell.append(track, el('small', '', `检查 ${job.attempts || 0} 轮`));
     const sessionMessage = !account.authenticated ? (account.error || (account.session_status === 'restoring' ? '正在读取数据库中的凭据并恢复会话' : account.session_status === 'retry' ? '会话暂时不可用，服务会自动重连' : account.session_status === 'login_required' ? '旧凭据被拒绝，请在账号管理重新短信验证' : '请到活动页选择共享账号，点击“使用所选账号”')) : '';
     const message = el('td'), text = el('p', 'last-message', sessionMessage || job.message || '等待执行'); text.title = text.textContent;
     message.append(text, el('small', '', '更新 ' + time(job.updated_at)));
@@ -124,7 +124,7 @@ import * as M from './task-model.js';
       ['执行方式', (job.weekly ? '每周三重复' : job.immediate ? '手动立即执行' : '单次预约') + (!job.enabled && job.weekly ? '（已停止）' : '')],
       ['本次计划时间', time(job.run_at)], ['最近完成时间', time(job.finished_at)],
       ['最近执行状态', M.labels[job.state] || job.state], ['账号登录', account.authenticated ? '已登录' : '待恢复登录，请在执行前到活动页连接共享账号'],
-      ['尝试 / 实际提交', `${job.attempts || 0} / ${job.max_attempts} 轮 · 提交 ${job.submissions || 0} 次`],
+      ['领取提交 / 检查', `提交 ${job.submissions || 0}/${job.max_attempts} 次 · 检查 ${job.attempts || 0} 轮`],
       ['重试间隔', `${job.interval_min}～${job.interval_max} 秒（请求结束后）`]];
     fields.forEach(([label,value]) => { const pair = el('div'); pair.append(el('dt','',label),el('dd','',value)); grid.append(pair); });
     const title = el('div', 'history-title'); title.append(el('h3', '', '执行记录'), el('span', '', '最新在前 · 最多保留 45 条'));
@@ -227,7 +227,7 @@ import * as M from './task-model.js';
     const value=settings();
     const error=!value.account_ids.length ? '请至少选择一个已连接的活动账号。' : M.validate({...value,run_at:M.nextWednesday()});
     if (error) { $('edit-error').textContent=error; $('edit-error').hidden=false; return; }
-    if (!confirm(`立即为 ${value.account_ids.length} 个账号执行领取？每账号最多尝试 ${value.max_attempts} 轮，成功即停。`)) return;
+    if (!confirm(`立即为 ${value.account_ids.length} 个账号执行领取？每账号最多提交 ${value.max_attempts} 次，成功即停。`)) return;
     mutate('edit-dialog','edit-error',()=>api('/api/schedules',{...value,immediate:true,weekly:false}));
   });
   $('stop-form').addEventListener('submit', event => { event.preventDefault(); mutate('stop-dialog', 'stop-error', () => api('/api/schedules/cancel', {account_ids:stoppingIds})); });

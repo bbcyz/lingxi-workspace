@@ -411,6 +411,7 @@ class SevenDaySchedulerTests(unittest.TestCase):
         self.scheduler.tick()
         self.assertFalse(self.queue.jobs)
         self.assertTrue(self.scheduler.metadata()['ended'])
+        self.assertEqual(self.scheduler.metadata()['end_reason'], 'time_expired')
         with self.assertRaises(SevenDayError) as error:
             self.scheduler.run('a', 'signin')
         self.assertEqual(error.exception.code, 'ACTIVITY_CLOSED')
@@ -421,6 +422,8 @@ class SevenDaySchedulerTests(unittest.TestCase):
         self.scheduler.tick()
         self.queue.drain()
         self.assertTrue(self.scheduler.metadata()['ended'])
+        self.assertEqual(self.scheduler.metadata()['end_reason'], 'sold_out')
+        self.assertEqual(self.scheduler.metadata()['end_at'], '2026-11-30T23:59:59+08:00')
         self.assertFalse(self.actions('signin'))
         self.assertFalse(self.actions('draw'))
         self.scheduler.config_due = 0

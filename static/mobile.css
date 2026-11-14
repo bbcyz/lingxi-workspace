@@ -73,6 +73,26 @@
   body.workspace-app .mobile-record-table :is(.row-actions,.task-actions,.checkin-actions,.star-actions,.monthly-actions){display:flex;flex-wrap:wrap;justify-content:flex-start;gap:8px;margin:0}
   body.workspace-app .mobile-record-table :is(time,.task-time){white-space:normal;font-variant-numeric:tabular-nums}
   body.workspace-app .mobile-record-table :is(.reply-preview,.task-content,.task-note){max-width:100%;-webkit-line-clamp:unset;overflow:visible}
+  /* Coupon records use compact rows rather than stacked field blocks. */
+  body.workspace-app .coupons-table.mobile-record-table>tbody>tr:not(.mobile-empty-row){grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name name" "time actions";gap:5px 10px;padding:12px 14px}
+  body.workspace-app .coupons-table.mobile-record-table>tbody>tr>td::before{display:none}
+  body.workspace-app .coupons-table.mobile-record-table>tbody>tr>td:nth-child(1){grid-area:name;min-height:52px;padding-right:76px!important}
+  body.workspace-app .coupons-table.mobile-record-table>tbody>tr>td:nth-child(2){position:absolute;top:12px;right:14px;grid-area:auto;text-align:right;font-size:18px;font-weight:650;color:#b85c13;white-space:nowrap}
+  body.workspace-app .coupons-table.mobile-record-table>tbody>tr>td:nth-child(3){grid-area:time;align-self:center;font-size:12px;color:#62758e}
+  body.workspace-app .coupons-table.mobile-record-table>tbody>tr>td:nth-child(3)::before{display:inline;content:"至 ";margin:0;color:inherit;font-size:inherit}
+  body.workspace-app .coupons-table.mobile-record-table>tbody>tr>td:nth-child(4){grid-area:name;align-self:end;justify-self:end;text-align:right}
+  body.workspace-app .coupons-table.mobile-record-table>tbody>tr>td:nth-child(5){grid-area:actions}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-name{font-size:15px;line-height:1.6;color:#263f5f}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-source{margin-top:2px;font-size:12px;line-height:1.6;color:#687b93}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-name-line{gap:3px 5px}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-tag{font-size:11px;line-height:18px;padding:1px 5px}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-status{font-size:11px;line-height:18px;padding:2px 6px}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-status.available{color:#14745a}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-status.history{color:#63748d}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-row-actions{justify-content:flex-end;gap:8px}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-row-actions>button{min-width:44px;min-height:40px;padding:7px 10px;font-size:13px;color:#46617e}
+  body.workspace-app .coupons-table.mobile-record-table .coupons-row-actions>.coupons-use-button{color:#175bc0;background:#edf4ff;border-color:#d5e3fa}
+  body.workspace-app .coupons-group-heading{min-height:42px;padding:10px 14px;font-size:15px}
   body.workspace-app .account-table .account-ready{background:#eef9f1}
   body.workspace-app .account-table .account-expired{background:#fff8e6}
   body.workspace-app .account-table .account-pending{background:#f7f9fc}

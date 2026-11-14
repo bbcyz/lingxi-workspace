@@ -68,9 +68,10 @@ class SevenDayScheduler:
         now = self.now()
         end = datetime.fromisoformat(value['end_at'])
         start = datetime.fromisoformat(value['start_at'])
-        ended = now >= end or bool(value.get('sold_out'))
+        end_reason = 'time_expired' if now >= end else 'sold_out' if value.get('sold_out') else None
+        ended = end_reason is not None
         return {**value, 'active': start <= now < end and not ended, 'ended': ended,
-                'server_time': now.isoformat()}
+                'end_reason': end_reason, 'server_time': now.isoformat()}
 
     def _available(self):
         campaign = self.metadata()

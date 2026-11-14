@@ -7,6 +7,7 @@
   <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/static/coupons.js" defer></script>
   <link rel="stylesheet" href="/static/mobile.css?v=mobile-1">
   <script src="/static/mobile.js?v=mobile-1" defer></script>
+  {% include 'theme_head.html' %}
 </head>
 <body class="workspace-app" data-workspace="coupons"><main class="portal-shell coupons-shell">
   <section class="coupons-heading"><div><h1>我的卡券</h1><p>查看共享账号的可用卡券、有效期和历史记录。</p></div><button id="coupons-refresh" class="secondary" type="button">刷新卡券</button></section>
@@ -38,13 +39,10 @@
   <p id="coupons-use-message" class="coupons-use-message" role="status" hidden></p>
   <section id="coupons-use-verification" class="coupons-use-field" hidden><h3>请完成官方安全验证</h3><p class="coupons-use-note">完成验证后会自动继续，无需再次点击。</p><div id="coupons-use-captcha"></div></section>
   <p id="coupons-use-error" class="coupons-feedback coupons-use-error" role="alert" hidden></p>
-  <section id="coupons-use-relogin" class="coupons-use-field coupons-inline-login" aria-labelledby="coupons-relogin-title" hidden>
+  <section id="coupons-use-relogin" class="coupons-use-field coupons-relogin-panel" aria-labelledby="coupons-relogin-title" hidden>
     <h3 id="coupons-relogin-title">重新登录当前账号</h3>
     <p id="coupons-relogin-message" class="coupons-use-note" role="status"></p>
-    <label for="coupons-relogin-code">登录验证码</label>
-    <div class="coupons-use-sms-row"><input id="coupons-relogin-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="输入 6 位登录验证码"><button id="coupons-relogin-sms" class="secondary" type="button">重新获取</button></div>
-    <p id="coupons-relogin-error" class="coupons-feedback coupons-use-error" role="alert" hidden></p>
-    <button id="coupons-relogin-confirm" class="primary" type="button">登录并继续</button>
+    <button id="coupons-relogin-open" class="primary" type="button">打开账号管理</button>
   </section>
   <section id="coupons-payment-panel" class="coupons-payment-panel" aria-label="支付宝支付链接" hidden>
     <h3>支付宝付款</h3><p class="coupons-use-note">进入官方收银台后，请核对金额并手动完成付款。</p>

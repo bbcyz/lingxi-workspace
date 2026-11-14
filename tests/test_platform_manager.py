@@ -132,6 +132,23 @@ class PlatformManagerTests(unittest.TestCase):
         manager.forget('account-b')
         self.assertIn(('forget', 'sample', 'account-b'), self.events)
 
+    def test_early_end_reason_is_returned_without_querying_or_restarting_activity(self):
+        self.activity()
+        manager = self.manager()
+        controller = self.controllers['sample']
+        with patch.object(controller, 'metadata', return_value={
+                'active': False, 'ended': True, 'end_reason': 'sold_out',
+                'end_at': '2026-11-30T23:59:59+08:00'}) as metadata:
+            manager.tick()
+            result = self.app.test_client().get('/api/platforms').json['platforms'][0]
+            self.assertEqual(result['state'], 'expired')
+            self.assertEqual(result['end_reason'], 'sold_out')
+            self.assertEqual(result['end_at'], '2026-11-30T23:59:59+08:00')
+            self.assertFalse(result['active'])
+            manager.tick()
+            self.assertEqual(metadata.call_count, 1)
+            self.assertEqual(self.events.count(('stop', 'sample', True, False)), 1)
+
     def test_permanent_delete_removes_only_selected_code_data_and_module_cache(self):
         selected = self.activity()
         other = self.activity('other', 'other')

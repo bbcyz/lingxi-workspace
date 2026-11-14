@@ -6,7 +6,8 @@
   let refreshing=false,refreshPending=false;
   const time=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
   const node=(tag,cls='',text)=>{const el=document.createElement(tag);el.className=cls;if(text!==undefined)el.textContent=text;return el;};
-  const writing=()=>Object.values(busy).some(value=>value==='claim'||value==='sms');
+  const writing=()=>Object.values(busy).some(value=>['claim','sms','track'].includes(value));
+  const untrackedOrders=()=>items.filter(item=>item.order_no&&!item.tracked);
   async function api(operation,payload){
     const response=await fetch('/api/mobile-rights/'+operation,payload===undefined?undefined:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     if(!(response.headers.get('Content-Type')||'').includes('application/json'))throw new Error('本机服务返回异常，请刷新页面或重启服务后重试。');
@@ -33,6 +34,7 @@
     $('rights-points-query').disabled=!loginId||Boolean(busy.points);
     $('rights-points-claim').disabled=!loginId||Boolean(busy.points)||!points?.can_claim;
     $('rights-track-add').disabled=!loginId||Boolean(busy.rights);
+    $('rights-track-all').disabled=!loginId||Boolean(busy.rights)||!untrackedOrders().length;
     for(const button of $('rights-accounts').children)button.disabled=writing();
     for(const button of $('rights-rows').querySelectorAll('button'))button.disabled=Boolean(busy.rights);
   }
@@ -57,7 +59,10 @@
       const status=node('td'),badge=node('span','rights-state'+(item.can_claim?' pending':['0','1'].includes(item.status_code)?' success':item.status.includes('核实')?' attention':''),item.status);status.append(badge);
       const actions=node('td'),buttons=node('div','rights-row-actions');
       if(item.can_claim){const claim=node('button','primary','领取');claim.type='button';claim.dataset.action='claim';claim.dataset.id=item.id;buttons.append(claim);}
-      const track=node('button','secondary',item.tracked?'移除记录':'添加记录');track.type='button';track.dataset.action='track';track.dataset.id=item.id||'';track.dataset.name=item.name;track.dataset.enabled=String(!item.tracked);buttons.append(track);actions.append(buttons);
+      if(!item.tracked||item.can_remove){
+        const track=node('button','secondary',item.tracked?'移除记录':'添加记录');track.type='button';track.dataset.action='track';track.dataset.name=item.name;track.dataset.enabled=String(!item.tracked);buttons.append(track);
+      }
+      if(buttons.children.length)actions.append(buttons);else actions.textContent='—';
       row.append(name,node('td','',item.order_time?time.format(new Date(item.order_time)):'—'),node('td','',item.order_no||'—'),status,node('td','rights-row-note',item.note||'—'),actions);return row;
     });
     if(!rows.length){const row=node('tr'),cell=node('td','rights-empty',busy.rights==='query'?'正在查询本月权益…':!loginId?'请先从账号管理添加账号。':items.length?'没有匹配的权益。':'本账号暂无本月权益记录。');cell.colSpan=6;row.append(cell);rows.push(row);}
@@ -124,15 +129,25 @@
     }catch(error){if(epoch===version){finalMessage=error.message;finalTone='error';}}
     finally{if(epoch===version){busy.rights='';$('rights-stop').hidden=true;await query('rights');message('rights',finalMessage,finalTone);controls();if(refreshPending){refreshPending=false;void refreshAccounts();}}}
   }
-  async function track(name,enabled){
-    if(!name.trim())return;
+  async function updateTracking(operation,payload){
+    if(!loginId||busy.rights)return;
     const id=loginId,epoch=version;
+    busy.rights='track';controls();
     try{
-      const result=await api('track',{login_id:id,name:name.trim(),enabled});if(epoch!==version)return;
-      items=items.filter(item=>item.order_no||result.tracked.includes(item.name)).map(item=>({...item,tracked:result.tracked.includes(item.name)}));
-      for(const watched of result.tracked)if(!items.some(item=>item.name===watched))items.push({id:null,name:watched,order_no:'',order_time:null,status:rightsComplete?'本月未发放':'待核对',status_code:'',can_claim:false,tracked:true,note:''});
-      renderRights();$('rights-track-name').value='';
+      const result=await api(operation,{login_id:id,...payload});if(epoch!==version)return;
+      const tracked=new Set(result.tracked);
+      items=items.filter(item=>item.order_no||tracked.has(item.name)).map(item=>({...item,tracked:tracked.has(item.name)}));
+      const displayed=new Set(items.map(item=>item.name));
+      for(const watched of tracked)if(!displayed.has(watched))items.push({id:null,name:watched,order_no:'',order_time:null,status:rightsComplete?'本月未发放':'待核对',status_code:'',can_claim:false,tracked:true,can_remove:rightsComplete,note:''});
+      renderRights();
+      if(operation==='track-batch')message('rights',result.added?`已添加 ${result.added} 项关注记录。`:'这些权益已有关注记录。','success');
+      else $('rights-track-name').value='';
     }catch(error){if(epoch===version)message('rights',error.message,'error');}
+    finally{if(epoch===version){busy.rights='';controls();if(refreshPending){refreshPending=false;void refreshAccounts();}}}
+  }
+  function track(name,enabled){
+    name=name.trim();
+    if(name)return updateTracking('track',{name,enabled});
   }
   async function youthAction(kind){
     if(busy.youth)return;const epoch=version,id=loginId,coupon=$('rights-youth-coupon').value;
@@ -164,6 +179,10 @@
   $('rights-stop').addEventListener('click',()=>{stopBatch=true;$('rights-stop').disabled=true;});
   $('rights-rows').addEventListener('click',event=>{const button=event.target.closest('button[data-action]');if(!button)return;if(button.dataset.action==='claim')void claimRights([button.dataset.id]);else void track(button.dataset.name,button.dataset.enabled==='true');});
   $('rights-track-add').addEventListener('click',()=>track($('rights-track-name').value,true));
+  $('rights-track-all').addEventListener('click',()=>{
+    const names=[...new Set(untrackedOrders().map(item=>item.name.trim()))];
+    if(names.length)return updateTracking('track-batch',{names});
+  });
   $('rights-youth-sms').addEventListener('click',()=>youthAction('sms'));
   $('rights-youth-claim').addEventListener('click',()=>youthAction('claim'));
   $('rights-youth-code').addEventListener('input',controls);

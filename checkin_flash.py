@@ -102,7 +102,7 @@ def run_flash_burst(prepared, settings, before_submit, cancelled, *, followup_se
         try:
             result = prepared.reconcile()
             if result[result_key+'_state'] == 'already_claimed':
-                winner = {'message': '官方状态确认本月已领取'}
+                winner = {'message': '官方状态确认已领取'}
         except CheckinError:
             pass
     if winner:

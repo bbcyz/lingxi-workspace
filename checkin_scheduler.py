@@ -1,7 +1,6 @@
-"""Persisted daily sign-in and noon coupon jobs using the shared APP pool."""
+"""Persisted daily sign-in and official flash rounds using the shared APP pool."""
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timedelta
 import math
@@ -9,10 +8,10 @@ import re
 import secrets
 from threading import Event, RLock, Thread
 
-from checkin_client import CheckinClient, CheckinError, FLASH_PRODUCT
+from checkin_client import CheckinClient, CheckinError, FLASH_PRODUCT, LEGACY_FLASH_PRODUCT, flash_period
 from checkin_flash import BURST_DEFAULTS, PREPARE_SECONDS
 from login_storage import LoginStorageError
-from feature_runtime import feature_running
+from feature_runtime import ThreadPoolExecutor, feature_running
 from recharge.cmcc import SHANGHAI
 
 
@@ -31,6 +30,8 @@ class CheckinScheduler:
         self.executor = executor or ThreadPoolExecutor(max_workers=32, thread_name_prefix='checkin')
         self.thread = None
         self.account_locks, self.refreshing, self.checked = {}, set(), {}
+        self.team_joining = set()
+        self.team_awards = None
         self.readiness = {}
         self.warning, self.load_error = '', ''
         self.data = {'tasks': {}, 'observations': {}, 'daily': {},
@@ -59,6 +60,7 @@ class CheckinScheduler:
                         record.update(state='interrupted', message='上次执行中断，结果待核实；未自动重发')
                 for task in recovered['tasks'].values():
                     if task['kind'] == 'flash':
+                        task['product_id'] = FLASH_PRODUCT
                         for key, value in BURST_DEFAULTS.items():
                             task.setdefault(key, value)
                     if task['state'] in ('preparing', 'running', 'stopping'):
@@ -77,6 +79,7 @@ class CheckinScheduler:
             'flash_enabled': True, 'product_id': FLASH_PRODUCT,
             **{key: flash.get(key, self.data['settings'].get(key, value)) for key, value in BURST_DEFAULTS.items()}})
         self.data['automation']['burst_workers'] = self.data['settings']['burst_workers']
+        self.data['automation']['product_id'] = FLASH_PRODUCT
 
     def _ensure_accounts(self, accounts):
         with self.lock:
@@ -110,6 +113,37 @@ class CheckinScheduler:
         hour, minute = map(int, clock.split(':'))
         at = max(now + timedelta(minutes=5), now.replace(hour=hour, minute=minute, second=0, microsecond=0))
         return at.isoformat() if at.date() == now.date() else self._next(clock)
+
+    def _next_flash(self, observation, after=None):
+        after = after or self.now()
+        official = observation.get('flash_next_at')
+        if official and datetime.fromisoformat(official) > after:
+            return official
+        return self._next('12:00', after)
+
+    def _observe(self, data, login_id, result):
+        observation = data['observations'].setdefault(login_id, {})
+        observation.update({key: value for key, value in result.items()
+                            if key not in ('state', 'message', 'submitted', 'attempt_count', 'attempts')})
+        if 'today_state' in result:
+            observation.pop('query_message', None)
+        if 'flash_kind' in result:
+            now = self.now()
+            kind, period = result['flash_kind'], result['flash_period']
+            claims = observation.setdefault('flash_claims', {})
+            if kind and result['flash_state'] == 'already_claimed':
+                claims[kind] = period
+            elif kind and claims.get(kind) == period:
+                observation.update(flash_state='already_claimed',
+                                   flash_message='本周已领取' if kind == 'weekly' else '本月已领取')
+            for task in data['tasks'].values():
+                if (task['login_id'] == login_id and task['kind'] == 'flash' and task['enabled']
+                        and task['state'] not in ('preparing', 'running', 'stopping')):
+                    next_at = task.get('next_run_at')
+                    if next_at and 0 <= (now - datetime.fromisoformat(next_at)).total_seconds() <= 120:
+                        continue  # The dispatcher still owns this open round.
+                    task['next_run_at'] = self._next_flash(observation, now)
+        return observation
 
     def update_settings(self, payload):
         workers, apply_existing = payload.get('burst_workers'), payload.get('apply_existing', True)
@@ -160,8 +194,8 @@ class CheckinScheduler:
             raise CheckinTaskError('请至少启用一项自动任务。')
         if not isinstance(clock, str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', clock):
             raise CheckinTaskError('请输入正确的签到时间。')
-        if flash and product != FLASH_PRODUCT:
-            raise CheckinTaskError('请选择月末2元话费券。')
+        if flash and product not in (FLASH_PRODUCT, LEGACY_FLASH_PRODUCT):
+            raise CheckinTaskError('请选择签到有礼的官方秒杀场次。')
         with self.lock:
             defaults = {key: self.data['automation'].get(key, value) for key, value in BURST_DEFAULTS.items()}
         burst = {key: payload.get(key, value) for key, value in defaults.items()}
@@ -189,6 +223,8 @@ class CheckinScheduler:
                                 cancel_requested=False, next_run_at=self._next(time) if enabled else None)
                     if kind == 'flash':
                         task.update(burst)
+                        if enabled:
+                            task['next_run_at'] = self._next_flash(updated['observations'].get(login_id, {}))
             self._commit(updated)
         return '自动任务已保存，默认应用于所有有效账号，新增或恢复登录后自动纳入' if global_settings else '自动任务已保存，每个账号每天执行一次'
 
@@ -227,6 +263,9 @@ class CheckinScheduler:
             observed = self.data['observations'].get(login_id, {})
             if kind == 'signin' and observed.get('date') == now.strftime('%Y%m%d') and observed.get('today_state') == 'signed':
                 return False
+            if (old and kind == 'flash' and scheduled_at is not None and old['state'] == 'skipped'
+                    and not old.get('submitted') and old.get('scheduled_at') != scheduled_at.isoformat()):
+                old = None  # A different official start may have been published since the read-only check.
             uncertain = old and old.get('uncertain', bool(old.get('submitted')) and 'GWT_LIMITED' not in old.get('message', ''))
             if old and ((old.get('submitted') and not (kind == 'signin' and retry and not uncertain))
                         or old['state'] not in ('failed', 'login_required', 'interrupted')):
@@ -239,10 +278,12 @@ class CheckinScheduler:
                         round_scheduled_at=scheduled_at.isoformat() if scheduled_at is not None else None,
                         message='正在预热秒杀会话，等待官方开放时间' if kind == 'flash' else '正在核对官方状态')
             if task['enabled']:
-                task['next_run_at'] = self._next(task['clock'], after=max(now, scheduled_at or now))
+                after = max(now, scheduled_at or now)
+                task['next_run_at'] = (self._next_flash(observed, after) if kind == 'flash'
+                                       else self._next(task['clock'], after))
             burst = {key: task.get(key, value) for key, value in BURST_DEFAULTS.items()}
             updated['daily'][key] = {'time': now.isoformat(), 'state': 'preparing', 'submitted': False,
-                'message': '', 'credential_revision': revision}
+                'message': '', 'credential_revision': revision, 'scheduled_at': task['round_scheduled_at']}
             # Retain a year of per-day deduplication records; histories are bounded separately.
             cutoff = (now - timedelta(days=370)).strftime('%Y%m%d')
             updated['daily'] = {k: v for k, v in updated['daily'].items() if k.rsplit(':', 1)[-1] >= cutoff}
@@ -271,10 +312,12 @@ class CheckinScheduler:
                 return self.quit.is_set() or self.data['tasks'][task_id].get('cancel_requested', False)
         try:
             with account_lock:
+                with self.lock:
+                    claims = self.data['observations'].get(login_id, {}).get('flash_claims', {}).copy()
                 client = self.client_factory(lambda: self.credentials(login_id))
                 result = (client.signin(before_submit=before_submit) if kind == 'signin' else
                           client.flash(FLASH_PRODUCT, before_submit=before_submit, burst=burst,
-                                       cancelled=cancelled, target_at=scheduled_at))
+                                       cancelled=cancelled, target_at=scheduled_at, claimed_periods=claims))
         except (CheckinError, LoginStorageError) as error:
             result = {'state': 'login_required' if getattr(error, 'status', None) == 401 else 'failed',
                 'message': str(error), 'uncertain': getattr(error, 'uncertain', False)}
@@ -289,16 +332,14 @@ class CheckinScheduler:
                 'uncertain': result.get('uncertain', submitted and state == 'failed'),
                 'credential_revision': updated['daily'][key].get('credential_revision', 0)}
             if kind == 'flash':
-                record.update(attempt_count=result.get('attempt_count', 0), attempts=result.get('attempts', []))
+                record.update(attempt_count=result.get('attempt_count', 0), attempts=result.get('attempts', []),
+                              scheduled_at=task['round_scheduled_at'], flash_kind=result.get('flash_kind', ''))
             updated['daily'][key] = record
             task.update(state=state, message=message)
             if kind == 'signin' and task['enabled'] and state in ('failed', 'login_required', 'interrupted'):
                 task['next_run_at'] = self._retry_at(task['clock'])
             task['history'] = [*task['history'], record][-120:]
-            observation = updated['observations'].setdefault(login_id, {})
-            observation.update({k: v for k, v in result.items() if k not in ('state', 'message', 'submitted', 'attempt_count', 'attempts')})
-            if 'today_state' in result:
-                observation.pop('query_message', None)
+            observation = self._observe(updated, login_id, result)
             if kind == 'signin':
                 observation.update(last_signin_at=record['time'], signin_message=message)
             else:
@@ -348,15 +389,21 @@ class CheckinScheduler:
             if task['kind'] == 'flash' and (self.now() - due_time).total_seconds() > 120:
                 with self.lock:
                     updated = deepcopy(self.data)
-                    updated['tasks'][task['id']].update(next_run_at=self._next('12:00'), state='skipped', message='本地服务错过今日12点，已安排下次执行')
+                    observation = updated['observations'].get(task['login_id'], {})
+                    updated['tasks'][task['id']].update(next_run_at=self._next_flash(observation), state='skipped',
+                                                       message='本地服务错过本场开放时间，已安排下次检查')
                     self._commit(updated)
             elif not self._enqueue(task['login_id'], task['kind'], scheduled_at=due_time):
                 with self.lock:
                     if task['id'] not in self.data['tasks']:
                         continue
                     updated = deepcopy(self.data)
-                    updated['tasks'][task['id']]['next_run_at'] = self._next(task['clock'])
+                    observation = updated['observations'].get(task['login_id'], {})
+                    updated['tasks'][task['id']]['next_run_at'] = self._next_flash(observation, max(now, due_time))
                     self._commit(updated)
+        if self.team_awards:
+            restored = {login_id for login_id in active if previous.get(login_id, ('active',))[0] != 'active'}
+            self.team_awards.queue_awards(active, restored=restored)
 
     def _refresh(self, login_id, account_lock):
         try:
@@ -369,8 +416,7 @@ class CheckinScheduler:
                 if self.account_locks.get(login_id) is not account_lock:
                     return
                 updated = deepcopy(self.data)
-                updated['observations'].setdefault(login_id, {}).update(result)
-                updated['observations'][login_id].pop('query_message', None)
+                self._observe(updated, login_id, result)
                 for task in updated['tasks'].values():
                     if task['login_id'] != login_id or task['kind'] != 'signin' or not task['enabled']:
                         continue
@@ -406,13 +452,18 @@ class CheckinScheduler:
                 login_id = account['id']
                 observed = observations.get(login_id, {})
                 current = observed.get('date') == now.strftime('%Y%m%d')
+                flash_kind = observed.get('flash_kind', '')
+                period = flash_period(flash_kind, now)
+                claimed = observed.get('flash_claims', {}).get(flash_kind) == period
                 account.update(today_state=observed.get('today_state', 'unknown') if current else 'unknown',
                     month_count=observed.get('month_count') if observed.get('date', '')[:6] == now.strftime('%Y%m') else None,
                     last_signin_at=observed.get('last_signin_at'),
                     signin_message='今日已签到' if current and observed.get('today_state') == 'signed'
                         else observed.get('query_message') or observed.get('signin_message', '尚未查询'),
-                    flash_state=observed.get('flash_state', 'unknown') if current else 'unknown',
-                    flash_message=observed.get('flash_message', '尚未查询'),
+                    flash_kind=flash_kind,
+                    flash_next_at=observed.get('flash_next_at'),
+                    flash_state='already_claimed' if claimed else observed.get('flash_state', 'unknown') if current else 'unknown',
+                    flash_message=observed.get('flash_message', '尚未查询') if current or claimed else '等待查询官方场次',
                     signin_enabled=any(t['login_id'] == login_id and t['kind'] == 'signin' and t['enabled'] for t in tasks),
                     flash_enabled=any(t['login_id'] == login_id and t['kind'] == 'flash' and t['enabled'] for t in tasks))
                 for product in observed.get('products', []):
@@ -426,6 +477,8 @@ class CheckinScheduler:
             for task in tasks:
                 info = account_map.get(task['login_id'], {})
                 task.update(account_name=info.get('name') or info.get('phone_masked', '已退出账号'), phone_masked=info.get('phone_masked', ''))
+                if task['kind'] == 'flash':
+                    task['flash_kind'] = info.get('flash_kind', '')
                 if (task['kind'] == 'signin' and task['enabled'] and info.get('today_state') == 'signed'
                         and task['state'] not in ('preparing', 'running', 'stopping')):
                     task.update(state='already_signed', message='今日已签到，已核对官方记录')
@@ -436,7 +489,9 @@ class CheckinScheduler:
 
     def busy_login(self, login_id):
         with self.lock:
-            return any(t['login_id'] == login_id and t['state'] in ('preparing', 'running', 'stopping') for t in self.data['tasks'].values())
+            return login_id in self.team_joining or any(
+                t['login_id'] == login_id and t['state'] in ('preparing', 'running', 'stopping')
+                for t in self.data['tasks'].values())
 
     def forget(self, login_id):
         with self.lock:
@@ -445,6 +500,10 @@ class CheckinScheduler:
             updated = deepcopy(self.data)
             updated['tasks'] = {key: task for key, task in updated['tasks'].items() if task['login_id'] != login_id}
             updated['observations'].pop(login_id, None)
+            if 'team_joins' in updated:
+                updated['team_joins'].pop(login_id, None)
+            if 'team_awards' in updated:
+                updated['team_awards'].pop(login_id, None)
             updated['daily'] = {key: value for key, value in updated['daily'].items() if key.split(':', 1)[0] != login_id}
             self._commit(updated)
             self.checked.pop(login_id, None)

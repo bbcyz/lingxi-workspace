@@ -90,7 +90,12 @@ async function openEditor(id=''){
   $('account-selection-tools').hidden=!!id;
   $('task-content').value=task?.content||'';
   $('repeat-count').value=task?.repeat_count??3;$('send-interval').value=task?.interval??1;$('weekly').checked=!!task?.weekly;
-  const upcoming=task?.next_run_at&&new Date(task.next_run_at).getTime()>Date.now()?task.next_run_at:new Date(Date.now()+120000);
+  const now=Date.now();
+  let upcoming=task?.next_run_at&&new Date(task.next_run_at).getTime()>now?task.next_run_at:new Date(now+120000);
+  if(!id){
+    upcoming=new Date(beijingInput(now).slice(0,10)+'T10:00:00+08:00');
+    if(upcoming.getTime()<=now)upcoming.setUTCDate(upcoming.getUTCDate()+1);
+  }
   $('run-at').value=beijingInput(upcoming);
   const options=accounts.map(account=>{
     const label=node('label','account-option'),check=node('input');check.type=id?'radio':'checkbox';check.name='task-account';check.value=account.id;

@@ -6,6 +6,7 @@
     "check": "node --check browser_bridge.mjs && node --check static/app.js"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.1.1",
     "playwright-core": "1.64.1"
   }
 }

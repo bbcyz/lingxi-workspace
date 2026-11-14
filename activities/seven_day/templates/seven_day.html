@@ -7,6 +7,7 @@
   <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/activities/seven-day/static/seven-day.js" defer></script>
   <link rel="stylesheet" href="/static/mobile.css?v=mobile-1">
   <script src="/static/mobile.js?v=mobile-1" defer></script>
+  {% include 'theme_head.html' %}
 </head>
 <body class="workspace-app" data-workspace="seven-day">
 <main class="portal-shell seven-shell">
@@ -16,7 +17,7 @@
   </section>
   <p id="seven-warning" class="seven-notice" role="status" hidden></p>
   <p id="seven-feedback" class="seven-feedback" role="status" hidden></p>
-  <section id="seven-ended" class="seven-ended" hidden><h2>活动已结束</h2><p>自动任务已停止，活动入口将从导航移除。已领取的奖品可在“我的卡券”查看。</p><a href="/coupons">查看我的卡券 →</a></section>
+  <section id="seven-ended" class="seven-ended" hidden><h2 id="seven-ended-title">活动已结束</h2><p id="seven-ended-description">自动任务已停止，活动入口将从导航移除。已领取的奖品可在“我的卡券”查看。</p><a href="/coupons">查看我的卡券 →</a></section>
   <section class="seven-panel" aria-label="7日打卡账号情况">
     <div class="seven-toolbar"><div><h2>共享账号 <span id="seven-total">—</span></h2><p id="seven-summary">正在读取各账号进度…</p></div><div class="seven-filters"><select id="seven-filter" aria-label="筛选七日活动状态"><option value="all">全部账号</option><option value="signin">今日待打卡</option><option value="claim">红包待领取</option><option value="draw">今日待夺宝</option><option value="attention">需要处理</option></select><input id="seven-search" type="search" placeholder="搜索账号或号码尾号" aria-label="搜索七日活动账号" autocomplete="off"></div></div>
     <div class="seven-automation-summary"><span id="seven-auto-summary">所有有效账号自动参与，新增或恢复登录后自动纳入。</span><span class="seven-business-time">北京时间</span></div>

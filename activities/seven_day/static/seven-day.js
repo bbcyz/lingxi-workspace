@@ -121,13 +121,16 @@
   function updateCampaign() {
     clearTimeout(expiryTimer);
     const campaign = model.campaign;
+    const soldOut = campaign.end_reason === 'sold_out';
     if (campaign.ended) window.dispatchEvent(new CustomEvent('platforms-changed'));
-    $('seven-period').textContent = campaign.end_at ? `至 ${date(campaign.end_at)}` : '活动时间暂未读取';
+    $('seven-period').textContent = campaign.end_at ? `计划至 ${date(campaign.end_at)}` : '活动时间暂未读取';
+    $('seven-ended-title').textContent = soldOut ? '红包已领完，活动提前结束' : '活动已结束';
+    $('seven-ended-description').textContent = soldOut ? '官方红包库存已耗尽，按活动规则，打卡和夺宝同步停止。已领取的奖品可在“我的卡券”查看。' : '自动任务已停止，活动入口将从导航移除。已领取的奖品可在“我的卡券”查看。';
     $('seven-warning').textContent = [campaign.notice, model.warning].filter(Boolean).join('\n');
     $('seven-warning').hidden = !$('seven-warning').textContent;
     $('seven-rules-text').textContent = campaign.rules_text || '';
     $('seven-official-rules').hidden = !campaign.rules_text;
-    $('seven-expiry-note').textContent = campaign.end_at ? `实际下线时间：${date(campaign.end_at)}。入口和后台任务跟随官方页面配置；如红包库存耗尽，整个活动会提前结束。` : '入口与自动任务跟随官方页面的实际下线时间。';
+    $('seven-expiry-note').textContent = campaign.end_at ? `计划截止时间：${date(campaign.end_at)}。入口和后台任务跟随官方页面配置；如红包库存耗尽，整个活动会提前结束。` : '入口与自动任务跟随官方页面的实际下线时间。';
     const remaining = Date.parse(campaign.end_at)-Date.parse(campaign.server_time);
     if (campaign.active && remaining > 0) {
       const deadline = Date.now()+remaining;

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from math import ceil
 from pathlib import Path
 import secrets
 import re
@@ -40,10 +41,17 @@ LOGIN_PATH = "/biz-orange/LN/uamsmscode/login"
 INIT_PATH = "/biz-orange/DN/init/startInit"
 REFRESH_PATH = "/biz-orange/DN/refreshSession"
 AUTH_REFRESH_PATH = "/biz-orange/LN/newuamauthlogin/login"
+SMS_COOLDOWN_SECONDS = 60
+SMS_VALID_SECONDS = 600
+SLIDER_REQUIRED_CODE = '214100'
+SLIDER_REQUIRED_MESSAGE = '中国移动要求完成官方滑块验证（214100，中风险）。请在手机中国移动 APP 完成验证。'
 
 
 class AppLoginError(Exception):
-    pass
+    def __init__(self, message, *, code='', retry_after=0):
+        super().__init__(message)
+        self.code = code
+        self.retry_after = retry_after
 
 
 class AppCredentialError(AppLoginError):
@@ -130,6 +138,8 @@ class AppLoginSession:
     cookie: str = field(default="", repr=False)
     phone: str = field(default="", repr=False)
     sms_sent_at: float = 0
+    sms_request_id: str = field(default='', repr=False)
+    slider_required: bool = False
     initialized_at: float = 0
     app_authenticated: bool = False
     user_info: dict = field(default_factory=dict, repr=False)
@@ -285,40 +295,59 @@ class AppLoginSession:
             # Provider descriptions can contain account information. Do not
             # pass them to the browser or logs; retain only a bounded code.
             safe_code = code if re.fullmatch(r"[A-Za-z0-9_-]{1,32}", code) else "unknown"
-            if code in ("214100", "214101", "214102"):
-                raise AppLoginError(f"中国移动要求额外安全验证（{safe_code}），当前网页登录暂不支持该验证。")
-            raise AppLoginError(f"中国移动{action}未通过（{safe_code}）。请检查输入，勿连续重试。")
+            if code == '213010' and action == '登录':
+                raise AppLoginError('短信验证码校验未通过（213010），请核对最近收到的验证码。', code=safe_code)
+            if code == SLIDER_REQUIRED_CODE:
+                raise AppLoginError(SLIDER_REQUIRED_MESSAGE, code=safe_code)
+            if code in ("214101", "214102"):
+                raise AppLoginError(f"中国移动 APP {action}未通过（{safe_code}），请在官方 APP 核对账号及验证提示后再试。", code=safe_code)
+            raise AppLoginError(f"中国移动{action}未通过（{safe_code}）。请检查输入，勿连续重试。", code=safe_code)
+
+    def sms_status(self, *, reused=False):
+        age = time.monotonic() - self.sms_sent_at
+        return {'sent': True, 'phone_masked': self.phone[:3]+'****'+self.phone[-4:],
+                'sms_request_id': self.sms_request_id, 'sms_reused': reused,
+                'slider_required': self.slider_required,
+                'retry_after': max(0, ceil(SMS_COOLDOWN_SECONDS-age)),
+                'expires_in': max(0, ceil(SMS_VALID_SECONDS-age))}
 
     def send_sms(self, phone: str):
         if not isinstance(phone, str) or not re.fullmatch(r"1[3-9][0-9]{9}", phone):
             raise AppLoginError("请输入正确的 11 位手机号。")
-        if self.sms_sent_at and time.monotonic() - self.sms_sent_at < 60:
-            raise AppLoginError("验证码发送间隔为 60 秒，请稍候。")
+        retry_after = ceil(SMS_COOLDOWN_SECONDS - (time.monotonic()-self.sms_sent_at))
+        if self.sms_sent_at and retry_after > 0:
+            raise AppLoginError('验证码发送间隔为 60 秒，请稍候。', code='SMS_COOLDOWN', retry_after=retry_after)
         # Record the attempt before sending: a network timeout may still have
         # delivered the SMS, so never automatically retry a send request.
         self.sms_sent_at = time.monotonic()
-        self.app_authenticated = False
-        if phone != self.phone:
+        if phone != self.phone or self.app_authenticated:
             self.cookie = ""
+        self.app_authenticated = False
         self.phone = ""
+        self.sms_request_id = ''
+        self.slider_required = False
         if not self.initialized_at or time.monotonic() - self.initialized_at > 600:
             self.initialize()
         _, value, _ = self.call(SEND_SMS_PATH, {"cellNum": phone, "pageUrl": "LL0001", "channelId": "1"})
         self.require_success(value, "发送验证码")
         self.phone = phone
-        return {"sent": True, "phone_masked": phone[:3] + "****" + phone[-4:], "retry_after": 60}
+        self.sms_request_id = secrets.token_urlsafe(18)
+        return self.sms_status()
 
     def login(self, phone: str, code: str) -> str:
         if not self.phone or phone != self.phone:
             raise AppLoginError("请先向该手机号发送验证码。")
         if self.app_authenticated and self.cookie:
             return self.cookie
-        if time.monotonic() - self.sms_sent_at > 600:
+        if time.monotonic() - self.sms_sent_at >= SMS_VALID_SECONDS:
             self.phone = ""
-            raise AppLoginError("验证码已超过 10 分钟，请重新获取。")
+            raise AppLoginError("验证码已超过 10 分钟，请重新获取。", code='SMS_EXPIRED')
+        if self.slider_required:
+            raise AppLoginError(SLIDER_REQUIRED_MESSAGE, code=SLIDER_REQUIRED_CODE)
         if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
             raise AppLoginError("请输入 6 位短信验证码。")
         _, value, _ = self.call(LOGIN_PATH, {"cellNum": encrypt_phone(phone), "verifyCode": code, "imei": "", "sendSmsFlag": "0", "devToken": "", "pageUrl": "LL0001", "channelId": "1"})
+        self.slider_required = str(value.get('retCode')) == SLIDER_REQUIRED_CODE
         self.require_success(value, "登录")
         if not self.cookie or "JSESSIONID=" not in self.cookie:
             raise AppLoginError("登录响应缺少 APP 会话，无法连接灵犀。")

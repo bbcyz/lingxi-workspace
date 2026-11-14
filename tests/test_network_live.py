@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from pathlib import Path
 import os
 import socket
@@ -7,7 +8,8 @@ from threading import Event, Thread
 import time
 from unittest import TestCase, main
 from unittest.mock import Mock, patch
-from urllib.request import ProxyHandler, build_opener
+from urllib.error import HTTPError
+from urllib.request import ProxyHandler, Request, build_opener
 
 from flask import Flask
 from login_storage import DatabaseLoginStorage
@@ -179,6 +181,97 @@ class LiveListenerTests(TestCase):
         self.wait_for(lambda:self.second in {h for h,_ in self.manager.bindings})
         self.assertEqual(self.get(self.second),'ok')
         self.assertEqual(self.manager.warning,'')
+
+
+class LivePortTests(TestCase):
+    def setUp(self):
+        folder=tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.storage=DatabaseLoginStorage(Path(folder.name)/'state.sqlite3')
+        self.app=Flask('port-test')
+        self.manager=register_network(self.app,self.storage)
+        self.manager.update({'ipv4':False,'ipv6':False})
+        self.started,self.release=Event(),Event()
+
+        @self.app.get('/hold')
+        def hold():
+            self.started.set()
+            self.release.wait(5)
+            return 'finished'
+
+        environment=patch.dict(os.environ)
+        environment.start();self.addCleanup(environment.stop)
+        os.environ.pop('LINGXI_HOST',None)
+        os.environ.pop('LINGXI_PORT',None)
+        inventory=patch('network_access.interface_addresses',return_value=[])
+        inventory.start();self.addCleanup(inventory.stop)
+        self.port_changed=Mock()
+        self.server=create_http_server(self.app,0,on_port_changed=self.port_changed)
+        self.worker=Thread(target=self.server.run,daemon=True)
+        self.worker.start()
+        self.addCleanup(self.stop)
+        self.opener=build_opener(ProxyHandler({}))
+        self.old_port=self.server.effective_port
+
+    def stop(self):
+        self.release.set();self.server.close();self.worker.join(2)
+
+    def save_port(self,port):
+        body=json.dumps({'ipv4':False,'ipv6':False,'port':port}).encode()
+        req=Request(f'http://127.0.0.1:{self.old_port}/api/network/settings',data=body,
+                    headers={'Content-Type':'application/json'})
+        with self.opener.open(req,timeout=4) as response:return json.load(response)
+
+    def test_saving_a_port_restarts_both_listeners_and_preserves_inflight_requests(self):
+        finished=[]
+        def hold():
+            with self.opener.open(f'http://127.0.0.1:{self.old_port}/hold',timeout=5) as response:
+                finished.append(response.read())
+        client=Thread(target=hold,daemon=True)
+        client.start();self.assertTrue(self.started.wait(2))
+        with socket.create_server(('127.0.0.1',0)) as free:
+            port=free.getsockname()[1]
+        response=self.save_port(port)
+        self.assertTrue(response['port_changed'])
+        self.assertEqual(response['port'],port)
+        self.port_changed.assert_called_once_with(port)
+        for host in ('127.0.0.1','[::1]'):
+            with self.opener.open(f'http://{host}:{port}/api/network/status',timeout=4) as result:
+                self.assertEqual(json.load(result)['port'],port)
+        self.assertEqual(NetworkSettings(self.storage).settings['port'],port)
+        with socket.socket() as connection:
+            connection.settimeout(1)
+            self.assertNotEqual(connection.connect_ex(('127.0.0.1',self.old_port)),0)
+        self.release.set();client.join(3)
+        self.assertEqual(finished,[b'finished'])
+        self.stop()
+        restarted=create_http_server(self.app)
+        try:self.assertEqual(restarted.effective_port,port)
+        finally:restarted.close()
+
+    def test_occupied_port_keeps_the_old_endpoint_and_saved_settings(self):
+        saved=self.storage.load_network_settings()
+        with socket.create_server(('127.0.0.1',0)) as occupied:
+            with self.assertRaises(HTTPError) as rejected:
+                self.save_port(occupied.getsockname()[1])
+            self.assertEqual(rejected.exception.code,400)
+            self.assertIn('无法监听端口',json.load(rejected.exception)['error'])
+        self.assertEqual(self.storage.load_network_settings(),saved)
+        with self.opener.open(f'http://127.0.0.1:{self.old_port}/api/network/status',timeout=4) as response:
+            self.assertEqual(json.load(response)['port'],self.old_port)
+        self.port_changed.assert_not_called()
+
+    def test_environment_port_takes_precedence_over_saved_port(self):
+        self.stop()
+        self.storage.save_network_settings({'ipv4':False,'ipv6':False,'port':65534})
+        app=Flask('override-test')
+        register_network(app,self.storage)
+        with patch.dict(os.environ,{'LINGXI_PORT':'0'}):
+            server=create_http_server(app)
+        try:
+            self.assertNotEqual(server.effective_port,65534)
+            self.assertFalse(app.extensions['network_settings'].status()['port_editable'])
+        finally:server.close()
 
 
 if __name__=='__main__':main()

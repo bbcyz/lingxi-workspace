@@ -89,6 +89,37 @@ class CheckinSchedulerTests(unittest.TestCase):
         self.assertEqual({t['clock'] for t in self.scheduler.data['tasks'].values() if t['kind'] == 'signin'}, {'06:30'})
         self.assertEqual({t['burst_workers'] for t in self.scheduler.data['tasks'].values() if t['kind'] == 'flash'}, {16})
 
+    def test_weekly_official_opening_replaces_the_noon_fallback(self):
+        self.scheduler.save({'login_ids': ['a'], 'signin_enabled': False, 'flash_enabled': True,
+                             'product_id': 'month-end-2yuan'})
+        target = self.time.replace(hour=11, minute=50)
+        self.scheduler._observe(self.scheduler.data, 'a', {
+            'flash_kind': 'weekly', 'flash_period': '2026-10-26', 'flash_state': 'unavailable',
+            'flash_next_at': target.isoformat(),
+        })
+        self.time = target - timedelta(seconds=31)
+        self.scheduler.tick()
+        self.assertEqual(self.executor.jobs, [])
+        self.time += timedelta(seconds=1)
+        self.scheduler.tick()
+        self.executor.drain()
+        self.assertEqual(self.calls, [FLASH_PRODUCT])
+        self.assertEqual(self.flash_options[0]['target_at'], target)
+
+    def test_flash_status_refresh_during_opening_does_not_discard_due_round(self):
+        self.scheduler.save({'login_ids': ['a'], 'signin_enabled': False, 'flash_enabled': True,
+                             'product_id': FLASH_PRODUCT})
+        target = self.time.replace(hour=12)
+        self.time = target + timedelta(seconds=15)
+        self.scheduler._observe(self.scheduler.data, 'a', {
+            'flash_kind': 'weekly', 'flash_period': '2026-10-26', 'flash_state': 'available',
+            'flash_next_at': (target + timedelta(days=1)).isoformat(),
+        })
+        self.scheduler.tick()
+        self.executor.drain()
+        self.assertEqual(self.calls, [FLASH_PRODUCT])
+        self.assertEqual(self.flash_options[0]['target_at'], target)
+
     def test_new_account_default_concurrency_follows_global_setting_not_legacy_override(self):
         self.configure()
         flash = next(t for t in self.scheduler.data['tasks'].values() if t['kind'] == 'flash')

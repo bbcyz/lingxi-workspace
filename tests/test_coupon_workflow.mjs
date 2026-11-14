@@ -27,7 +27,8 @@ async function fixture(mode,options={}) {
   get('coupons-category').value='all';
   const pending=options.pendingOrders||(mode==='payment'?[{order_id:'existing-order',coupon_name:'fixture',amount:'30'}]:[]);
   const card={id:'coupon',name:'fixture',use_kind:['exchange','rights','flow'].includes(mode)?mode:'recharge',category:['rights','flow'].includes(mode)?'flow':'fee',status:'available'};
-  let loggedIn=false,loginAttempts=0,prepareCount=0,accepted=false;
+  const reloginRequests=[];
+  let loggedIn=false,resolveLogin,prepareCount=0,accepted=false;
   const http=async(url,fetchOptions)=>{
     const body=fetchOptions?.body?JSON.parse(fetchOptions.body):undefined;calls.push({url,body});
     let result,status=200;
@@ -45,12 +46,6 @@ async function fixture(mode,options={}) {
         const rows=accepted&&options.consumeOnAccepted?[]:options.itemsByAccount?.[accountId]||[card];
         result={items:rows,page:1,total:rows.length,has_more:false,pending_orders:pending,reminder:options.reminders?.[accountId]};
       }
-    }
-    else if(url==='/api/logins/relogin/sms')result={sent:true,phone_masked:'138****0000',retry_after:60};
-    else if(url==='/api/logins/relogin'){
-      loginAttempts++;
-      if(options.wrongCode&&loginAttempts===1){status=400;result={error:'验证码错误'};}
-      else {loggedIn=true;result={account:{id:'account',status:'active',name:'fixture',phone_masked:'138****0000'}};}
     }
     else if(url==='/api/coupons/use/prepare'){
       if(options.prepareAuth&&!loggedIn){status=401;result={code:'APP_LOGIN_REQUIRED',error:'请重新登录'};}
@@ -79,6 +74,7 @@ async function fixture(mode,options={}) {
   vm.runInNewContext(fs.readFileSync(new URL('../static/coupons.js',import.meta.url),'utf8'),{
     document:{cookie:'session=private; _zw_kvani5r=real-sdk-lid',getElementById:get,createElement:tag=>new Element(tag),querySelectorAll:()=>[],head:{append(script){script.onload();}}},
     window:{addEventListener:(name,fn)=>{events[name]=fn;},dispatchEvent:event=>dispatched.push(event),publishAccountsChanged:()=>events['accounts-changed'](),
+      requestSharedRelogin:id=>new Promise(resolve=>{reloginRequests.push(id);resolveLogin=resolve;}),
       _zw:{ConstID(config,done){calls.push({url:'official-sdk',body:config});done(options.sdkError||null,options.sdkError?'':'real-sdk-token');}}},fetch:http,location:{origin:'http://localhost:5500'},Intl,URLSearchParams,Date:class extends Date{static now(){return options.now??Date.now();}},
     CustomEvent:class{constructor(type,options={}){this.type=type;this.detail=options.detail;}},
     clearInterval(){},setInterval(){return 1;},clearTimeout(id){timers.delete(id);},
@@ -93,7 +89,11 @@ async function fixture(mode,options={}) {
     await walk(get('coupons-list'),mode==='exchange'?'兑换话费':['rights','flow'].includes(mode)?'兑换流量':'充值使用').click();
     submission=get('coupons-use-form').requestSubmit();if(!['exchange','rights','flow'].includes(mode))await submission;
   }
-  return {get,calls,events,submission,timers};
+  return {get,calls,events,submission,timers,reloginRequests,async completeLogin(success=true){
+    loggedIn=success;
+    resolveLogin(success?{id:'account',status:'active',name:'fixture',phone_masked:'138****0000'}:null);
+    await new Promise(resolve=>setImmediate(resolve));
+  }};
 }
 
 test('HTML payment error preserves the bound order and never creates another order or sends login SMS',async()=>{
@@ -161,19 +161,13 @@ for(const mode of ['payment','submission'])test(`human verification automaticall
   assert.equal(env.get('coupons-payment-url').value,'https://mclient.alipay.com/cashierRoutePay.htm?fixture');
 });
 
-for(const code of ['ALIPAY_RELOGIN_REQUIRED','APP_LOGIN_REQUIRED','COUPON_LOGIN_REQUIRED','500003'])test(`${code}: inline login sends one SMS and resumes original order`,async()=>{
+for(const code of ['ALIPAY_RELOGIN_REQUIRED','APP_LOGIN_REQUIRED','APP_SESSION_EXPIRED','COUPON_LOGIN_REQUIRED','500003'])test(`${code}: shared account login resumes original order`,async()=>{
   const env=await fixture('payment',{errorCode:code}),{get,calls}=env;
   assert.equal(get('coupons-use').open,true);
   assert.equal(get('coupons-use-relogin').hidden,false);
-  const sms=calls.filter(call=>call.url==='/api/logins/relogin/sms');
-  assert.equal(sms.length,1);
-  assert.equal(sms[0].body.id,'account');assert.equal(sms[0].body.force,true);
-  await get('coupons-relogin-sms').click();
-  assert.equal(calls.filter(call=>call.url==='/api/logins/relogin/sms').length,1,'cooldown prevents a second SMS');
-  get('coupons-relogin-code').value='123456';
-  const login=get('coupons-relogin-confirm').click();
-  await get('coupons-relogin-confirm').click();await login;
-  assert.equal(calls.filter(call=>call.url==='/api/logins/relogin').length,1);
+  assert.deepEqual(env.reloginRequests,['account']);
+  await env.completeLogin();
+  assert.equal(calls.some(call=>call.url.startsWith('/api/logins/')),false);
   const payments=calls.filter(call=>call.url==='/api/coupons/use/payment');
   assert.equal(payments.length,2);assert.equal(payments[1].body.order_id,'existing-order');
   assert.equal(payments[1].body.refresh,true);assert.equal(payments[1].body.captcha_token,'');
@@ -181,27 +175,26 @@ for(const code of ['ALIPAY_RELOGIN_REQUIRED','APP_LOGIN_REQUIRED','COUPON_LOGIN_
   assert.equal(get('coupons-use').open,true);
   assert.equal(get('coupons-use-relogin').hidden,true);
   assert.match(get('coupons-payment-url').value,/^https:\/\/mclient.alipay.com\//);
-  assert.equal(get('coupons-relogin-code').value,'');
 });
 
-test('wrong login OTP keeps current popup and allows correction without another SMS',async()=>{
-  const {get,calls}=await fixture('payment',{errorCode:'ALIPAY_RELOGIN_REQUIRED',wrongCode:true});
-  get('coupons-relogin-code').value='123456';await get('coupons-relogin-confirm').click();
-  assert.equal(get('coupons-relogin-error').textContent,'验证码错误');
+test('cancelled shared login preserves the order and can be reopened manually',async()=>{
+  const env=await fixture('payment',{errorCode:'ALIPAY_RELOGIN_REQUIRED'}),{get,calls}=env;
+  await env.completeLogin(false);
+  assert.equal(get('coupons-use').open,true);
   assert.equal(get('coupons-use-relogin').hidden,false);
   assert.equal(calls.filter(call=>call.url==='/api/coupons/use/payment').length,1);
-  get('coupons-relogin-code').value='654321';await get('coupons-relogin-confirm').click();
-  assert.equal(calls.filter(call=>call.url==='/api/logins/relogin/sms').length,1);
+  const reopen=get('coupons-relogin-open').click();
+  assert.deepEqual(env.reloginRequests,['account','account']);
+  await env.completeLogin();await reopen;
   assert.equal(get('coupons-use-relogin').hidden,true);
 });
 
 test('CV3 after successful login offers manual retry without an SMS or login loop',async()=>{
-  const {get,calls}=await fixture('payment',{errorCode:'ALIPAY_RELOGIN_REQUIRED',repeatError:true});
-  get('coupons-relogin-code').value='123456';await get('coupons-relogin-confirm').click();
+  const env=await fixture('payment',{errorCode:'ALIPAY_RELOGIN_REQUIRED',repeatError:true}),{get,calls}=env;
+  await env.completeLogin();
   assert.equal(get('coupons-use-relogin').hidden,false);
-  assert.match(get('coupons-relogin-message').textContent,/不会自动重复/);
-  assert.equal(calls.filter(call=>call.url==='/api/logins/relogin/sms').length,1);
-  assert.equal(calls.filter(call=>call.url==='/api/logins/relogin').length,1);
+  assert.match(get('coupons-relogin-message').textContent,/官方仍要求验证/);
+  assert.deepEqual(env.reloginRequests,['account']);
   assert.equal(calls.filter(call=>call.url==='/api/coupons/use/payment').length,2);
 });
 
@@ -212,15 +205,14 @@ test('500002 remains a submission error and does not trigger login SMS',async()=
   assert.equal(calls.some(call=>call.url.startsWith('/api/logins/')),false);
 });
 
-test('531022 in a successful HTTP response opens inline login and prepares a fresh operation after login',async()=>{
-  const {get,calls}=await fixture('submission',{failedResultCode:'531022'});
+test('531022 in a successful HTTP response opens shared login and prepares a fresh operation after login',async()=>{
+  const env=await fixture('submission',{failedResultCode:'531022'}),{get,calls}=env;
   assert.equal(get('coupons-use').open,true);
   assert.equal(get('coupons-use-relogin').hidden,false);
   assert.equal(get('coupons-use-confirm').hidden,true);
-  const sms=calls.filter(call=>call.url==='/api/logins/relogin/sms');
-  assert.equal(sms.length,1);assert.equal(sms[0].body.id,'account');
+  assert.deepEqual(env.reloginRequests,['account']);
   assert.equal(calls.filter(call=>call.url==='/api/coupons/use/confirm').length,1);
-  get('coupons-relogin-code').value='123456';await get('coupons-relogin-confirm').click();
+  await env.completeLogin();
   assert.equal(get('coupons-use-relogin').hidden,true);
   assert.equal(get('coupons-use-confirm').disabled,false);
   assert.equal(calls.filter(call=>call.url==='/api/coupons/use/prepare').length,2);
@@ -232,13 +224,12 @@ test('531022 in a successful HTTP response opens inline login and prepares a fre
 });
 
 test('531022 recurring after login does not loop login SMS or automatically resubmit',async()=>{
-  const {get,calls}=await fixture('submission',{failedResultCode:'531022',repeatError:true});
-  get('coupons-relogin-code').value='123456';await get('coupons-relogin-confirm').click();
+  const env=await fixture('submission',{failedResultCode:'531022',repeatError:true}),{get,calls}=env;
+  await env.completeLogin();
   await get('coupons-use-form').requestSubmit();
   assert.equal(get('coupons-use-relogin').hidden,false);
-  assert.match(get('coupons-relogin-message').textContent,/不会自动重复/);
-  assert.equal(calls.filter(call=>call.url==='/api/logins/relogin/sms').length,1);
-  assert.equal(calls.filter(call=>call.url==='/api/logins/relogin').length,1);
+  assert.match(get('coupons-relogin-message').textContent,/官方仍要求验证/);
+  assert.deepEqual(env.reloginRequests,['account']);
   assert.equal(calls.filter(call=>call.url==='/api/coupons/use/confirm').length,2);
 });
 
@@ -248,14 +239,27 @@ test('other rejected recharge results do not trigger login SMS',async()=>{
   assert.equal(calls.some(call=>call.url.startsWith('/api/logins/')),false);
 });
 
-test('expired account during preparation logs in inline and requires confirmation before ordering',async()=>{
-  const {get,calls}=await fixture('submission',{prepareAuth:true});
+test('expired account during preparation uses shared login and requires confirmation before ordering',async()=>{
+  const env=await fixture('submission',{prepareAuth:true}),{get,calls}=env;
   assert.equal(get('coupons-use-relogin').hidden,false);
-  get('coupons-relogin-code').value='123456';await get('coupons-relogin-confirm').click();
+  await env.completeLogin();
   assert.equal(calls.filter(call=>call.url==='/api/coupons/use/prepare').length,2);
   assert.equal(calls.some(call=>call.url==='/api/coupons/use/confirm'),false);
   assert.equal(get('coupons-use-confirm').disabled,false);
   assert.equal(get('coupons-use').open,true);
+});
+
+test('a wallet session rejected before ordering resumes the same coupon without confirming again',async()=>{
+  const env=await fixture('submission',{errorCode:'500003'}),{get,calls}=env;
+  assert.deepEqual(env.reloginRequests,['account']);
+  assert.equal(get('coupons-use-confirm').disabled,true);
+  await env.completeLogin();
+  const prepares=calls.filter(call=>call.url==='/api/coupons/use/prepare');
+  assert.deepEqual(prepares.map(call=>call.body),[
+    {login_id:'account',coupon_id:'coupon'},{login_id:'account',coupon_id:'coupon'},
+  ]);
+  assert.equal(calls.filter(call=>call.url==='/api/coupons/use/confirm').length,1);
+  assert.equal(get('coupons-use-confirm').disabled,false);
 });
 
 test('exchange validates SMS, then initializes official SDK, then submits its opaque result',async()=>{
@@ -293,7 +297,7 @@ for(const mode of ['exchange','rights','flow'])test(`${mode}: accepted exchange 
 });
 
 const renderedText=element=>[element.textContent||'',...element.children.map(renderedText)].join(' ');
-test('account cards show useful fee coupon bubbles separately from all available coupons',async()=>{
+test('account cards show only useful fee coupon bubbles and login status',async()=>{
   const accounts=['account','other','empty'].map(id=>({id,name:id,status:'active',credential_revision:1}));
   const reminders={account:{count:2,unpriced:1},other:{count:4,unpriced:0},empty:{count:0,unpriced:0}};
   const {get,dispatched,calls}=await fixture('counts',{onlyCounts:true,accounts,reminders});
@@ -301,29 +305,43 @@ test('account cards show useful fee coupon bubbles separately from all available
   assert.equal(bubbles[0].textContent,'2');assert.equal(bubbles[0].hidden,false);
   assert.match(bubbles[0].title,/低于9.1折/);assert.match(bubbles[0].title,/1 张充值券规则待核对/);
   assert.equal(bubbles[1].textContent,'4');assert.equal(bubbles[2].hidden,true);
-  assert.match(renderedText(get('coupons-accounts').children[0]),/可用 1 张/,get('coupons-feedback').textContent||'existing all-coupon count is retained');
+  assert.doesNotMatch(renderedText(get('coupons-accounts')),/可用\s+\d+\s*张|查券中|未获取/);
+  assert.match(renderedText(get('coupons-accounts')),/已登录/);
   assert.equal(dispatched.filter(event=>event.type==='coupon-reminders-changed').length,3);
   assert.equal(calls.filter(call=>call.url.startsWith('/api/coupons?')).length,3,'no extra wallet reads for rendering bubbles');
 });
 
-test('account badges count usable coupons independently and exclude future or locked coupons',async()=>{
+test('coupon categories remain visible and other coupons sit below flow coupons',async()=>{
   const accounts=['selected','other','empty','expired'].map((id,index)=>({id,name:id,credential_revision:1,status:id==='expired'?'login_required':'active',phone_masked:'138****000'+index}));
   const {get,calls}=await fixture('counts',{onlyCounts:true,accounts,itemsByAccount:{
-    selected:[{id:'1',name:'one',category:'fee',status:'available'},{id:'2',name:'future',category:'fee',status:'待生效'}],
-    other:[{id:'3',name:'three',status:'available'},{id:'4',name:'four',status:'available'},{id:'5',name:'locked',status:'官方状态 9'}],empty:[]}});
-  const text=get('coupons-accounts').children.map(renderedText);
-  assert.match(text[0],/selected.*可用 1 张/);
-  assert.match(text[1],/other.*可用 2 张/);
-  assert.match(text[2],/empty.*可用 0 张/);
-  assert.match(text[3],/expired.*—/);
+    selected:[{id:'1',name:'one',category:'fee',status:'available'},{id:'2',name:'future',category:'fee',status:'待生效'},
+      {id:'6',name:'100M流量券',category:'flow',status:'available',use_kind:'flow'}],
+    other:[{id:'3',name:'three',category:'fee',status:'available'},{id:'4',name:'four',category:'other',status:'available'},
+      {id:'5',name:'locked',category:'other',status:'官方状态 9'},{id:'7',name:'流量权益券',category:'flow',status:'available',use_kind:'rights'}],
+    empty:[{id:'8',name:'200M流量券',category:'flow',status:'available',use_kind:'flow'},
+      {id:'9',name:'活动邀请券',category:'other',status:'available'}]}});
+  assert.match(renderedText(get('coupons-accounts').children[3]),/expired.*需重新登录/);
+  assert.match(renderedText(get('coupons-list')),/100M流量券.*兑换流量/);
+  await get('coupons-accounts').children[1].click();
+  const [fee,right]=get('coupons-list').children;
+  assert.equal(fee.className,'coupons-group coupons-group-fee');
+  assert.equal(right.className,'coupons-column-right');
+  assert.deepEqual(right.children.map(group=>group.className),['coupons-group coupons-group-flow','coupons-group coupons-group-other']);
+  assert.match(renderedText(right.children[0]),/流量权益券.*兑换流量/);
+  assert.match(renderedText(right.children[1]),/four.*详情/);
+  get('coupons-category').value='other';
+  get('coupons-category').handlers.change();
+  assert.deepEqual(get('coupons-list').children.map(group=>group.className),['coupons-group coupons-group-other']);
   assert.equal(calls.some(call=>call.url.includes('login_id=expired')),false);
 });
 
-test('background count failure shows unknown rather than zero and never sends a login SMS',async()=>{
+test('background reminder failure keeps the last confirmed bubble and never sends a login SMS',async()=>{
   const accounts=['account','bad'].map(id=>({id,name:id,status:'active',credential_revision:1}));
-  const {get,calls}=await fixture('counts',{onlyCounts:true,accounts,countFailureIds:['bad']});
-  const bad=renderedText(get('coupons-accounts').children[1]);
-  assert.match(bad,/未获取/);assert.doesNotMatch(bad,/可用 0 张/);
+  const {get,calls}=await fixture('counts',{onlyCounts:true,accounts,countFailureIds:['bad'],reminders:{bad:{count:2}}});
+  const bad=get('coupons-accounts').children[1];
+  const bubble=bad.children[0].children.find(child=>child.className==='coupons-account-reminder');
+  assert.equal(bubble.textContent,'2');assert.equal(bubble.hidden,false);
+  assert.doesNotMatch(renderedText(bad),/未获取|可用 0 张/);
   assert.equal(calls.some(call=>call.url.startsWith('/api/logins/')),false);
   assert.equal(get('coupons-use').open,false);
 });
@@ -335,7 +353,7 @@ test('clicking the selected account retries its failed list immediately without 
   assert.equal(get('coupons-feedback').hidden,true);
   assert.equal(calls.filter(c=>c.url.startsWith('/api/coupons?')).length,2);
   assert.equal(calls.some(c=>c.url.startsWith('/api/logins/')),false);
-  assert.match(renderedText(get('coupons-accounts')),/可用 1 张/);
+  assert.match(renderedText(get('coupons-list')),/fixture/);
 });
 
 test('a terminal session timeout replaces the stale green account state and focuses login without sending SMS',async()=>{
@@ -385,7 +403,7 @@ test('official notices show dynamic title and plain text even when the wallet qu
 test('no official notice hides the banner without delaying card loading',async()=>{
   const env=await fixture('counts',{onlyCounts:true});
   assert.equal(env.get('coupons-notices').hidden,true);
-  assert.match(renderedText(env.get('coupons-accounts')),/可用 1 张/);
+  assert.match(renderedText(env.get('coupons-list')),/fixture/);
 });
 
 test('a working wallet does not fetch or display cached maintenance notices',async()=>{
@@ -405,7 +423,7 @@ test('a successful retry hides the notice and stops notice polling',async()=>{
   assert.equal(env.get('coupons-notices').hidden,true);
   assert.equal(env.timers.size,0);
   assert.equal(env.calls.filter(call=>call.url==='/api/coupons/notices').length,1);
-  assert.match(renderedText(env.get('coupons-accounts')),/可用 1 张/);
+  assert.match(renderedText(env.get('coupons-list')),/fixture/);
 });
 
 test('a late notice response cannot reopen the banner after wallet recovery',async()=>{
@@ -432,20 +450,23 @@ test('login notifications during a failed in-flight refresh coalesce into one im
   assert.equal(calls.filter(c=>c.url==='/api/coupons/accounts').length,2);
   assert.equal(calls.filter(c=>c.url.startsWith('/api/coupons?')).length,2);
   assert.equal(get('coupons-feedback').hidden,true);
-  assert.match(renderedText(get('coupons-accounts')),/可用 1 张/);
+  assert.match(renderedText(get('coupons-list')),/fixture/);
   assert.equal(calls.some(c=>c.url.startsWith('/api/logins/')),false);
 });
 
-test('refresh updates other account counts and accepted exchange refreshes selected count',async()=>{
+test('refresh updates other account reminder bubbles and accepted exchange refreshes selected coupon list',async()=>{
   const rows={account:[{id:'1',name:'one',category:'fee',status:'available'}],other:[]};
   const accounts=['account','other'].map(id=>({id,name:id,status:'active',credential_revision:1}));
-  const env=await fixture('counts',{onlyCounts:true,accounts,itemsByAccount:rows});
-  rows.other=[{id:'2',status:'available'}];
+  const reminders={other:{count:0}};
+  const env=await fixture('counts',{onlyCounts:true,accounts,itemsByAccount:rows,reminders});
+  rows.other=[{id:'2',category:'fee',status:'available'}];
+  reminders.other={count:1};
   await env.get('coupons-refresh').click();await new Promise(resolve=>setImmediate(resolve));
-  assert.match(renderedText(env.get('coupons-accounts').children[1]),/可用 1 张/);
+  const bubble=env.get('coupons-accounts').children[1].children[0].children.find(child=>child.className==='coupons-account-reminder');
+  assert.equal(bubble.textContent,'1');assert.equal(bubble.hidden,false);
   const exchanged=await fixture('exchange',{consumeOnAccepted:true});await exchanged.submission;
   await new Promise(resolve=>setImmediate(resolve));
-  assert.match(renderedText(exchanged.get('coupons-accounts')),/可用 0 张/);
+  assert.match(renderedText(exchanged.get('coupons-list')),/暂无可用卡券/);
 });
 
 test('unknown previous submission is rechecked without replay and retry preparation needs a click',async()=>{
@@ -461,4 +482,41 @@ test('unknown previous submission is rechecked without replay and retry preparat
   await env.get('coupons-use-retry').click();
   assert.equal(env.calls.at(-1).body.retry,true);
   assert.equal(env.calls.some(call=>call.url==='/api/coupons/use/confirm'),false);
+});
+
+test('coupon name labels combine strict recharge value with a 72-hour expiry window',async()=>{
+  const now=Date.UTC(2026,10,9,8),day=86400000;
+  const rows=[
+    {id:'both',name:'both',use_kind:'recharge',worth_recharging:true,expires_at:new Date(now+3*day).toISOString()},
+    {id:'worth',name:'worth',use_kind:'recharge',worth_recharging:true,expires_at:new Date(now+4*day).toISOString()},
+    {id:'low-value',name:'low-value',use_kind:'recharge',worth_recharging:false,expires_at:new Date(now+day).toISOString()},
+    {id:'unpriced',name:'unpriced',use_kind:'recharge',expires_at:new Date(now+day).toISOString()},
+    {id:'boundary',name:'boundary',expires_at:new Date(now+3*day).toISOString()},
+    {id:'later',name:'later',expires_at:new Date(now+3*day+1).toISOString()},
+    {id:'expired',name:'expired',worth_recharging:true,expires_at:new Date(now-1).toISOString()},
+    {id:'used',name:'used',status:'used',expires_at:new Date(now-day).toISOString()},
+    {id:'flow',name:'flow',category:'flow',expires_at:new Date(now+day).toISOString()},
+    {id:'exchange',name:'exchange',use_kind:'exchange',expires_at:new Date(now+day).toISOString()},
+    {id:'exchange-later',name:'exchange-later',use_kind:'exchange',expires_at:new Date(now+4*day).toISOString()},
+    {id:'invalid',name:'invalid',expires_at:'not-a-date'},
+  ].map(row=>({category:'fee',status:'available',...row}));
+  const {get,calls}=await fixture('counts',{onlyCounts:true,now,itemsByAccount:{account:rows}});
+  const descend=node=>[node,...node.children.flatMap(descend)];
+  const renderedRows=descend(get('coupons-list')).filter(node=>node.tag==='tr');
+  const tags=name=>{
+    const row=renderedRows.find(row=>descend(row).some(node=>node.className==='coupons-name'&&node.textContent===name));
+    return descend(row).filter(node=>node.className?.startsWith('coupons-tag ')).map(node=>node.textContent);
+  };
+  assert.deepEqual(tags('both'),['值得充','快过期']);
+  assert.deepEqual(tags('worth'),['值得充']);
+  assert.deepEqual(tags('low-value'),[]);
+  assert.deepEqual(tags('unpriced'),[]);
+  assert.deepEqual(tags('boundary'),['快过期']);
+  assert.deepEqual(tags('later'),[]);assert.deepEqual(tags('expired'),[]);
+  assert.deepEqual(tags('used'),[]);assert.deepEqual(tags('invalid'),[]);
+  assert.deepEqual(tags('flow'),['快过期']);
+  assert.deepEqual(tags('exchange'),['值得兑','快过期']);
+  assert.deepEqual(tags('exchange-later'),['值得兑']);
+  assert.equal(calls.filter(call=>call.url.startsWith('/api/coupons?')).length,1);
+  assert.ok(calls.every(call=>!call.body));
 });

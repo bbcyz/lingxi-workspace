@@ -15,6 +15,7 @@ BUILTINS = (
     ('monthly-coupon', '每月话费券', '/monthly-coupon', ('/monthly-coupon', '/api/monthly-coupon')),
     ('coupons', '我的卡券', '/coupons', ('/coupons', '/api/coupons', '/coupon-verification')),
     ('mobile-rights', '移动权益', '/mobile-rights', ('/mobile-rights', '/api/mobile-rights')),
+    ('member-benefits', '会员权益', '/member-benefits', ('/member-benefits', '/api/member-benefits')),
     ('bills', '信息查询', '/information', ('/information', '/bills', '/api/bills', '/api/usage', '/api/services')),
 )
 
@@ -79,11 +80,14 @@ class FeatureControl:
             for key, entry in self.entries.items():
                 platform = entry['platform']
                 state = platform['state'] if platform else 'running'
+                metadata = platform['metadata'] if platform else {}
                 rows.append(dict(id=key, title=entry['title'], home=entry['home'],
                     enabled=self.enabled(key), state=state, temporary=entry['temporary'],
-                    active=self.enabled(key) and state == 'running', can_delete=platform is not None,
+                    active=self.enabled(key) and state == 'running' and (platform is None or bool(metadata.get('active'))),
+                    can_delete=platform is not None,
                     navigation=platform.get('navigation','main') if platform else 'main',
-                    end_at=platform['metadata'].get('end_at') if platform else None))
+                    end_at=metadata.get('end_at'), end_reason=metadata.get('end_reason'),
+                    server_time=metadata.get('server_time')))
             return self.order_rows(rows)
 
     def default_order(self):
@@ -126,6 +130,8 @@ class FeatureControl:
         return max(candidates, default=(0, None))[1]
 
     def install_gate(self, app, *, fixed_id=None):
+        app.add_template_global(self.public, name='workspace_features')
+
         @app.before_request
         def gate_feature():
             feature_id = fixed_id or self.identify(request.path)

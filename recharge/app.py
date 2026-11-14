@@ -271,7 +271,7 @@ def create_app(client=None, *, manager=None, scheduler=None, app_login_provider=
             raise ActivityError('请使用手机号和验证码登录 APP', 'APP_LOGIN_REQUIRED', 401)
         material = app_login_provider()
         if not material:
-            raise ActivityError('请先在灵犀页面使用手机号和验证码登录一次', 'APP_LOGIN_REQUIRED', 401)
+            raise ActivityError('请在账号管理登录共享账号', 'APP_LOGIN_REQUIRED', 401)
         login_id = None
         if app_credentials_provider is not None:
             for item in app_accounts_provider() if app_accounts_provider else []:
@@ -387,6 +387,12 @@ def create_app(client=None, *, manager=None, scheduler=None, app_login_provider=
         ids = account_ids(data)
         jobs = scheduler.schedule(ids, data, immediate=data.get('immediate') is True)
         return jsonify(jobs=jobs, message='已为选中账号启动任务' if data.get('immediate') else '定时任务已保存')
+
+    @app.post('/api/schedules/run-now')
+    def run_schedules_now():
+        if app_accounts_provider is None:
+            raise ActivityError('手动抢券需使用共享账号', 'SHARED_ACCOUNTS_REQUIRED', 409)
+        return jsonify(scheduler.run_now(account_ids(request.get_json())))
 
     @app.post('/api/schedules/cancel')
     def cancel_schedules():

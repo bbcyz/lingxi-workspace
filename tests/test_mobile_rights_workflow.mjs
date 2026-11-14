@@ -105,3 +105,37 @@ test('search and filters use existing local results without requesting upstream'
   env.get('rights-pending-only').checked=true;env.get('rights-pending-only').handlers.change();assert.match(text(env.get('rights-rows')),/没有匹配/);
   assert.equal(env.calls.length,count);
 });
+
+test('only a confirmed unissued watch record shows the remove button',async()=>{
+  const tracked=(id,status,extra={})=>({...item(id),status,tracked:true,can_claim:false,...extra});
+  const env=await fixture({handler:async operation=>operation==='query'?{data:{items:[
+    tracked('issued','已发放',{status_code:'0'}),tracked('complete','已完成',{status_code:'1'}),
+    tracked('pending','待领取',{can_claim:true}),tracked('unknown','待核对',{order_no:''}),
+    tracked('absent','本月未发放',{order_no:'',can_remove:true}),item('untracked'),
+  ],warnings:[],complete:true}}:undefined});
+  const actions=env.get('rights-rows').children.map(row=>row.querySelectorAll('button').map(button=>button.textContent));
+  assert.deepEqual(actions,[[],[],['领取'],[],['移除记录'],['领取','添加记录']]);
+});
+
+test('one click records distinct current-account rights across table filters without claiming',async()=>{
+  const duplicate={...item('two'),name:'会员权益-one'};
+  const issued={...item('done'),status:'已发放',status_code:'0',can_claim:false};
+  const absent={...item('absent'),order_no:'',tracked:true,can_claim:false,can_remove:true};
+  const env=await fixture({handler:async operation=>{
+    if(operation==='query')return {data:{items:[item('one'),duplicate,issued,absent],complete:true,warnings:[]}};
+    if(operation==='track-batch')return {data:{added:2,tracked:['会员权益-absent','会员权益-one','会员权益-done']}};
+  }});
+  env.get('rights-search').value='会员权益-one';
+  env.get('rights-search').handlers.input();
+  const button=env.get('rights-track-all');
+  assert.equal(button.disabled,false);
+  const request=button.click();
+  assert.equal(button.disabled,true);
+  await request;
+  assert.deepEqual(env.calls.at(-1),{operation:'track-batch',body:{login_id:'a',names:['会员权益-one','会员权益-done']}});
+  assert.equal(env.calls.filter(call=>call.operation==='query').length,1);
+  assert.equal(env.calls.some(call=>call.operation==='claim'),false);
+  assert.equal(button.disabled,true);
+  assert.match(env.get('rights-message').textContent,/已添加 2 项关注记录/);
+  assert.doesNotMatch(text(env.get('rights-rows')),/添加记录/);
+});

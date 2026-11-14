@@ -13,13 +13,14 @@ from flask import Flask, Response, jsonify, render_template, request, session, s
 from http_transport import RequestException
 
 from lingxi_client import Account, LingxiError, chat, exchange_cookie, verify_token
-from app_login import AppLoginError, AppLoginSession, AppCredentialError
+from app_login import AppLoginError, AppLoginSession, AppCredentialError, SMS_VALID_SECONDS
 from unified_logins import UnifiedLogins
 from login_storage import DatabaseLoginStorage, LoginStorageError
 from bill_query import register_bills
 from usage_query import register_usage
 from services_query import register_services
 from mobile_rights import register_mobile_rights
+from member_benefits import register_member_benefits
 from session_maintenance import SessionMaintenance
 from recharge.cmcc import ActivityError
 from lingxi_scheduler import LingxiScheduler, TaskError
@@ -63,7 +64,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
     database = DatabaseLoginStorage(database_path) if database_path is not None else None
     features = FeatureControl(app, database)
     access_security = register_access(app, database)
-    register_network(app, database)
+    network = register_network(app, database)
     register_updates(app, database)
     credential_cache = CredentialCache(database)
     app.extensions['credential_cache'] = credential_cache
@@ -116,8 +117,9 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                 logged.auth_code, logged.verified = saved.token, bool(saved.token)
                 logged.app_cookie, logged.app_profile = saved.cookie, dict(saved.profile)
 
-    def app_verification_busy(login_id):
-        return coupon_uses.busy_login(login_id) or app.extensions['services_queries'].cancellations.busy_login(login_id)
+    def app_verification_busy(login_id, *, relogin=False):
+        return (app.extensions['services_queries'].cancellations.busy_login(login_id)
+                or coupon_uses.busy_login(login_id, discard_previews=relogin))
 
     def refresh_app_credentials(saved, *, force=False, expired_cookie=None):
         with unified.phone_lock(saved.phone):
@@ -457,7 +459,19 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
 
     @app.get('/api/checkin/status')
     def checkin_status():
-        return jsonify(checkin_scheduler.status())
+        return jsonify(**checkin_scheduler.status(), team_awards=checkin_teams.award_status())
+
+    @app.post('/api/checkin/teams/awards')
+    def checkin_team_awards():
+        return jsonify(queued=checkin_teams.queue_awards(immediate=True))
+
+    @app.post('/api/checkin/teams/preview')
+    def preview_checkin_teams():
+        return jsonify(checkin_teams.preview())
+
+    @app.post('/api/checkin/teams/join')
+    def join_checkin_teams():
+        return jsonify(checkin_teams.apply(request.get_json().get('plan_id')))
 
     @app.get('/star-day')
     def star_day_page():
@@ -667,9 +681,10 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                 saved = unified.get(phone)
                 if relogin and saved is not target:
                     return jsonify(error='账号已退出，请重新添加账号。'), 404
-                if saved and app_verification_busy(saved.id):
+                reauthenticate = saved and (saved.status == 'login_required' or relogin and value.get('force') is True)
+                if saved and app_verification_busy(saved.id, relogin=bool(relogin and reauthenticate)):
                     return jsonify(error='该账号正在用券或业务退订验证中，请完成后再重新登录。', code='ACCOUNT_BUSY'), 409
-                if saved and saved.status != 'login_required' and not (relogin and value.get('force') is True):
+                if saved and not reauthenticate:
                     try:
                         current = reuse_login(current, saved, activate=not manage)
                         return jsonify(reused=True, account=saved.public()) if manage else jsonify(reused=True, **current.status())
@@ -680,22 +695,22 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                             raise
                 with unified.lock:
                     flow = unified.pending.get(phone)
-                if flow is not None and flow.phone == phone and time.monotonic() - flow.sms_sent_at < 600:
-                    with accounts_lock:
-                        login_flows[session['sid']] = flow
-                    if relogin and value.get('resend') is True:
-                        return jsonify(**flow.send_sms(phone))
-                    return jsonify(sent=True, phone_masked=phone[:3]+'****'+phone[-4:],
-                                   retry_after=max(0, int(60 - (time.monotonic() - flow.sms_sent_at))))
-                flow = AppLoginSession()
+                if flow is None or time.monotonic() - flow.sms_sent_at >= SMS_VALID_SECONDS:
+                    device_id = flow.device_id if flow is not None else saved.app_context.get('device_id') if saved else None
+                    flow = AppLoginSession()
+                    if device_id:
+                        flow.device_id = device_id
+                    with unified.lock:
+                        unified.pending[phone] = flow
                 with accounts_lock:
                     login_flows[session['sid']] = flow
-                result = flow.send_sms(phone)
-                with unified.lock:
-                    unified.pending[phone] = flow
-                return jsonify(**result)
+                request_id = value.get('sms_request_id')
+                resend = value.get('resend') is True and (request_id is None or request_id == flow.sms_request_id)
+                if flow.phone == phone and not resend:
+                    return jsonify(**flow.sms_status(reused=True))
+                return jsonify(**flow.send_sms(phone))
         except AppLoginError as exc:
-            return jsonify(error=str(exc)), 400
+            return jsonify(error=str(exc), code=exc.code, retry_after=exc.retry_after), 400
         except LingxiError as exc:
             return jsonify(error=str(exc)), 400
         except RequestException:
@@ -728,13 +743,20 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                 saved = unified.get(phone)
                 if relogin and saved is not target:
                     return jsonify(error='账号已退出，请重新添加账号。'), 404
-                if saved and app_verification_busy(saved.id):
+                reauthenticate = saved and (saved.status == 'login_required' or relogin and value.get('force') is True)
+                if saved and app_verification_busy(saved.id, relogin=bool(relogin and reauthenticate)):
                     return jsonify(error='该账号正在用券或业务退订验证中，请完成后再重新登录。', code='ACCOUNT_BUSY'), 409
-                if saved and saved.status != 'login_required' and not (relogin and value.get('force') is True):
+                if saved and not reauthenticate:
                     current = reuse_login(current, saved, activate=not manage)
                 else:
                     with unified.lock:
                         pending = unified.pending.get(phone)
+                    request_id = value.get('sms_request_id')
+                    if request_id is not None and (pending is None or request_id != pending.sms_request_id):
+                        latest = (pending.sms_status(reused=True) if pending is not None and pending.phone == phone
+                                  and time.monotonic() - pending.sms_sent_at < SMS_VALID_SECONDS else None)
+                        message = '验证码已更新，请填写最近收到的验证码。' if latest else '本次验证码已失效，请重新获取。'
+                        return jsonify(error=message, code='SMS_FLOW_CHANGED', sms=latest), 409
                     flow = pending if pending is not None else login_flow()
                     cookie = flow.login(phone, code)
                     token = ''
@@ -756,7 +778,9 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
             with accounts_lock:
                 login_flows.pop(session["sid"], None)
             return jsonify(account=saved.public(), message='账号已重新登录，任务绑定和备注已保留' if relogin else '账号已加入共享账号池') if manage else jsonify(**current.status(), login_id=saved.id)
-        except (AppLoginError, LingxiError) as exc:
+        except AppLoginError as exc:
+            return jsonify(error=str(exc), code=exc.code), 400
+        except LingxiError as exc:
             return jsonify(error=str(exc)), 400
         except RequestException:
             return jsonify(error="连接灵犀登录服务失败，请稍后重试。"), 502
@@ -1008,6 +1032,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
         recharge.config.update(SESSION_COOKIE_NAME='recharge_session', SESSION_COOKIE_PATH='/recharge', WORKSPACE_ACCESS_GUARDED=True)
         app.extensions['recharge_app'] = recharge
         features.install_gate(recharge, fixed_id='recharge')
+        recharge.add_template_global(network.sidebar, name='workspace_network')
         app.wsgi_app = DispatcherMiddleware(app.wsgi_app, {'/recharge': recharge})
 
     @features.scoped('recharge', skip_disabled=True)
@@ -1155,6 +1180,10 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
     checkin_scheduler = CheckinScheduler(checkin_credentials, unified.public, storage=database,
         client_factory=lambda provider:CheckinClient(provider,credential_cache=credential_cache))
     app.extensions['checkin_scheduler'] = checkin_scheduler
+    from checkin_teams import CheckinTeams
+    checkin_teams = CheckinTeams(checkin_scheduler)
+    checkin_scheduler.team_awards = checkin_teams
+    app.extensions['checkin_teams'] = checkin_teams
     def monthly_credentials(login_id):
         with unified.lock:
             saved = unified.get_id(login_id)
@@ -1203,6 +1232,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                    accept_credentials=accept_bill_credentials)
     register_services(app, unified.public, unified.credentials, recover=recover_activity_identity,
                       accept_credentials=accept_bill_credentials)
+    register_member_benefits(app, unified.credentials, credential_cache, recover=recover_activity_identity)
     register_mobile_rights(app, unified.public, unified.credentials, storage=database, cache=credential_cache,
                            recover=recover_activity_identity, accept_credentials=accept_bill_credentials)
 
@@ -1232,7 +1262,6 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
 app = create_app(enable_recharge=True, database_path=DATA_DIR/'accounts.sqlite3',recharge_data_dir=RECHARGE_DATA_DIR)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("LINGXI_PORT", "5500"))
     app.extensions['update_checker'].start()
     app.extensions['session_maintenance'].start()
     app.extensions['lingxi_scheduler'].start()
@@ -1242,6 +1271,6 @@ if __name__ == "__main__":
     app.extensions['platform_manager'].start()
     app.extensions['recharge_app'].extensions['scheduler'].start()
     from network_access import create_http_server
-    server = create_http_server(app, port)
+    server = create_http_server(app)
     print(f'本地工具台已启动：IPv4 http://127.0.0.1:{server.effective_port}/ · IPv6 http://[::1]:{server.effective_port}/', flush=True)
     server.run()

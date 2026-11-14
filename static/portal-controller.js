@@ -1,4 +1,4 @@
-export function mountPortal(root, {manager = false, embedded = false} = {}) {
+export function mountPortal(root, {manager = false, embedded = false, onLogin, onReloginCancel} = {}) {
 const isManager = manager;
 const prefix = embedded ? 'modal-' : '';
 if (embedded) {
@@ -6,14 +6,17 @@ if (embedded) {
   root.querySelectorAll('label[for]').forEach(item => { item.htmlFor = prefix + item.htmlFor; });
 }
 const byId = id => root.querySelector('#' + prefix + id);
-let working = false, smsPhone = '', smsReadyAt = 0, reloginId = '';
+let working = false, reloginId = '';
 let poolRecords = [];
 let focusedLoginId = '';
 const smsAttempts = new Map();
+const smsKey = () => reloginId ? 'id:' + reloginId : byId('phone').value.trim();
 async function portalApi(path, body) {
   const response = await fetch(path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || '操作失败，请重试。');
+  if (!response.ok) throw Object.assign(new Error(data.error || '操作失败，请重试。'), {
+    code:data.code, sms:data.sms, retryAfter:data.retry_after,
+  });
   return data;
 }
 function portalFeedback(text, success = false) {
@@ -103,8 +106,12 @@ async function managerAction(action) {
 }
 function smsCountdown() {
   const button = byId('send-sms');
-  const wait = Math.max(0,Math.ceil((smsReadyAt - Date.now())/1000));
-  button.textContent = wait ? wait + ' 秒后重发' : (reloginId ? '重新发送验证码' : '获取验证码'); button.disabled = working || wait > 0;
+  const attempt = smsAttempts.get(smsKey());
+  const wait = Math.max(0,Math.ceil(((attempt?.readyAt || 0) - Date.now())/1000));
+  button.textContent = wait ? wait + ' 秒后重发' : (reloginId || attempt?.sliderRequired ? '重新发送验证码' : '获取验证码'); button.disabled = working || wait > 0;
+  byId('manager-login-button').disabled = working || attempt?.sliderRequired || !(attempt?.expiresAt > Date.now());
+  byId('code').disabled = working || Boolean(attempt?.sliderRequired);
+  byId('login-slider-required').hidden = !attempt?.sliderRequired;
 }
 function setRelogin(record = null) {
   reloginId = record ? record.id : '';
@@ -115,9 +122,6 @@ function setRelogin(record = null) {
   byId('login-panel-description').textContent = record ? '验证码将发送至 ' + record.phone_masked + '，只需填写验证码。' : '已有登录会直接复用，不再重复发送验证码。';
   byId('manager-login-button').textContent = record ? '确认重新登录' : '登录并加入账号池';
   byId('code').value = '';
-  const phone = byId('phone').value.trim(), attempt = smsAttempts.get(reloginId ? 'id:' + reloginId : phone);
-  smsReadyAt = attempt?.readyAt || 0;
-  if (!reloginId) smsPhone = attempt?.sent ? phone : '';
   smsCountdown();
 }
 async function reloginAccount(record) {
@@ -126,48 +130,87 @@ async function reloginAccount(record) {
   await sendManagerSms(); byId('code').focus();
 }
 async function sendManagerSms(resend = false) {
-  const phone = byId('phone').value.trim(), key = reloginId ? 'id:' + reloginId : phone;
-  smsReadyAt = Date.now() + 60000;
-  smsAttempts.set(key, {readyAt:smsReadyAt, sent:false});
-  portalFeedback(reloginId ? '正在向原手机号发送验证码…' : '正在检查账号并获取验证码…');
-  const result = await portalApi(reloginId ? '/api/logins/relogin/sms' : '/api/logins/sms', reloginId ? {id:reloginId, resend, force:true} : {phone});
+  const key = smsKey(), previous = smsAttempts.get(key);
+  const identity = reloginId ? {id:reloginId, force:true} : {phone:key};
+  portalFeedback('正在获取当前账号的登录验证码…');
+  let result;
+  try {
+    result = await portalApi(reloginId ? '/api/logins/relogin/sms' : '/api/logins/sms',
+      {...identity, resend, sms_request_id:previous?.requestId});
+  } catch(error) {
+    if(error.code==='SMS_COOLDOWN'){
+      smsAttempts.set(key,{...previous,readyAt:Date.now()+error.retryAfter*1000});
+    }else if(resend){
+      smsAttempts.delete(key);
+      byId('code').value='';
+    }
+    throw error;
+  }
   if (result.reused) {
     const relogging = !!reloginId;
-    smsAttempts.delete(key); smsPhone = ''; byId('code').value = '';
+    smsAttempts.delete(key); byId('code').value = '';
     if (relogging) setRelogin();
     portalFeedback(relogging ? '该账号登录已恢复，无需再次短信验证。' : '该手机号已在账号池中，已复用现有登录，无需再次验证码。', true);
-    window.publishAccountsChanged(); await refreshPool(); return;
+    window.publishAccountsChanged(); onLogin?.(result.account); await refreshPool(); return;
   }
-  smsReadyAt = Date.now() + result.retry_after * 1000;
-  smsAttempts.set(key, {readyAt:smsReadyAt, sent:true});
-  if (reloginId) byId('login-panel-description').textContent = '验证码已发送至 ' + result.phone_masked + '，只需填写验证码。';
-  else smsPhone = phone;
-  portalFeedback('验证码已发送至 ' + result.phone_masked, true); byId('code').value = '';
+  acceptSms(key,result);
+  if (result.slider_required) { portalFeedback(''); return; }
+  portalFeedback(result.sms_reused ? '已有有效验证码，请填写最近收到的短信。' : '验证码已发送至 ' + result.phone_masked,true);
+}
+function acceptSms(key,result) {
+  const now=Date.now();
+  smsAttempts.set(key,{requestId:result.sms_request_id,readyAt:now+result.retry_after*1000,
+    expiresAt:now+(result.expires_in??600)*1000,sliderRequired:result.slider_required===true});
+  if(reloginId)byId('login-panel-description').textContent='请填写 '+result.phone_masked+' 最近收到的登录验证码。';
+  byId('code').value='';
+  smsCountdown();
 }
 if (isManager) {
-  byId('cancel-relogin').addEventListener('click', () => { setRelogin(); portalFeedback(''); });
+  byId('cancel-relogin').addEventListener('click', () => {
+    const id=reloginId;setRelogin();portalFeedback('');onReloginCancel?.(id);
+  });
   byId('phone').addEventListener('input', () => {
-    const phone = byId('phone').value.trim(), attempt = smsAttempts.get(phone);
-    smsReadyAt = attempt?.readyAt || 0; smsPhone = attempt?.sent ? phone : ''; smsCountdown();
+    byId('code').value='';smsCountdown();
   });
   byId('refresh-accounts').addEventListener('click', () => refreshPool().catch(error => portalFeedback(error.message)));
   byId('send-sms').addEventListener('click', () => {
-    if ((!reloginId && !byId('phone').reportValidity()) || Date.now() < smsReadyAt) return;
-    managerAction(() => sendManagerSms(!!reloginId));
+    if (!reloginId && !byId('phone').reportValidity()) return;
+    managerAction(() => sendManagerSms(Boolean(smsAttempts.get(smsKey())?.expiresAt > Date.now())));
   });
   byId('manager-login-form').addEventListener('submit', event => {
-    event.preventDefault(); const phone = byId('phone').value.trim(), relogging = !!reloginId;
-    if (!relogging && phone !== smsPhone) { portalFeedback('请先向该手机号获取验证码。'); return; }
+    event.preventDefault(); const key=smsKey(),attempt=smsAttempts.get(key),relogging=Boolean(reloginId);
+    if (attempt?.sliderRequired) return;
+    if (!(attempt?.expiresAt > Date.now())) { portalFeedback('请先获取当前账号的验证码。'); return; }
     managerAction(async () => {
       portalFeedback(relogging ? '正在重新登录并更新共享凭据…' : '正在登录并加入共享账号池…');
-      const result = await portalApi(relogging ? '/api/logins/relogin' : '/api/logins/login', relogging ? {id:reloginId, code:byId('code').value.trim(), force:true} : {phone, code:byId('code').value.trim(), name:byId('login-name').value.trim()});
-      if (relogging) { smsAttempts.delete('id:' + reloginId); setRelogin(); }
-      else { byId('manager-login-form').reset(); smsPhone = ''; smsReadyAt = 0; }
+      const identity=relogging?{id:reloginId,force:true}:{phone:key,name:byId('login-name').value.trim()};
+      let result;
+      try{
+        result=await portalApi(relogging?'/api/logins/relogin':'/api/logins/login',
+          {...identity,code:byId('code').value.trim(),sms_request_id:attempt.requestId});
+      }catch(error){
+        if(error.code==='214100'){
+          smsAttempts.set(key,{...attempt,sliderRequired:true});
+          byId('code').value='';
+          portalFeedback('');
+          return;
+        }
+        if(error.code==='SMS_FLOW_CHANGED'||error.code==='SMS_EXPIRED'){
+          if(error.sms)acceptSms(key,error.sms);
+          else smsAttempts.delete(key);
+        }
+        if(['213010','SMS_FLOW_CHANGED','SMS_EXPIRED'].includes(error.code))byId('code').value='';
+        throw error;
+      }
+      smsAttempts.delete(key);
+      if(relogging)setRelogin();
+      else byId('manager-login-form').reset();
       portalFeedback(relogging ? result.message : '账号已加入，灵犀和周三充值日均可选择使用。', true);
-      window.publishAccountsChanged(); await refreshPool();
+      window.publishAccountsChanged(); onLogin?.(result.account); await refreshPool();
     });
   });
   setInterval(smsCountdown, 1000);
+  smsCountdown();
 }
 function reloadWhenIdle() {
   if (embedded && !root.closest('dialog').open || working || root.contains(document.activeElement) && document.activeElement.closest('.managed-account')) return;
