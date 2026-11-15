@@ -20,34 +20,7 @@ def _dpapi(data: bytes, *, decrypt=False) -> bytes:
         vault = jclass('cn.pppyl.lingxiworkspace.CredentialVault')
         return bytes(vault.decrypt(data) if decrypt else vault.encrypt(data))
     if os.name != 'nt':
-        if decrypt:
-            try:
-                stripped = data.strip()
-                if (stripped.startswith(b'{') and stripped.endswith(b'}')) or (stripped.startswith(b'[') and stripped.endswith(b']')):
-                    json.loads(stripped.decode('utf-8'))
-                    return data
-            except Exception:
-                pass
-            from cryptography.fernet import Fernet
-            key_file = Path(os.environ.get('LINGXI_DATA_DIR', '/data')) / '.vault.key'
-            if not key_file.exists():
-                return data
-            try:
-                f = Fernet(key_file.read_bytes().strip())
-                return f.decrypt(data)
-            except Exception:
-                return data
-        else:
-            from cryptography.fernet import Fernet
-            key_file = Path(os.environ.get('LINGXI_DATA_DIR', '/data')) / '.vault.key'
-            try:
-                if not key_file.exists():
-                    key_file.parent.mkdir(parents=True, exist_ok=True)
-                    key_file.write_bytes(Fernet.generate_key())
-                f = Fernet(key_file.read_bytes().strip())
-                return f.encrypt(data)
-            except Exception as error:
-                raise LoginStorageError('Linux 加密凭据存储异常') from error
+        raise LoginStorageError('当前系统不支持 Windows 登录态加密，账号仅保留在内存中。')
 
     class Blob(ctypes.Structure):
         _fields_ = [('size', wintypes.DWORD), ('data', ctypes.POINTER(ctypes.c_ubyte))]
@@ -138,8 +111,8 @@ class DatabaseLoginStorage:
             with self.lock, self._connect() as connection:
                 row = connection.execute('SELECT payload FROM activity_state WHERE platform_id=?', (platform_id,)).fetchone()
             return json.loads(self.unprotect(row[0]).decode('utf-8')) if row else None
-        except Exception:
-            return None
+        except (sqlite3.Error, ValueError, UnicodeError) as error:
+            raise LoginStorageError('活动数据读取失败，已保留原数据库。') from error
 
     def load_access_security(self):
         with self.lock, self._connect() as connection:
@@ -185,8 +158,8 @@ class DatabaseLoginStorage:
             with self.lock, self._connect() as connection:
                 row = connection.execute('SELECT payload FROM credential_sessions WHERE scope=? AND login_id=?', (scope,login_id)).fetchone()
             return json.loads(self.unprotect(row[0]).decode('utf-8')) if row else None
-        except (sqlite3.Error, ValueError, UnicodeError):
-            return None
+        except (sqlite3.Error, ValueError, UnicodeError) as error:
+            raise LoginStorageError('活动凭据读取失败，已保留原数据库。') from error
 
     def save_credentials(self, scope, login_id, data):
         payload = self.protect(json.dumps(data,ensure_ascii=False).encode('utf-8'))
@@ -226,8 +199,8 @@ class DatabaseLoginStorage:
             with self.lock, self._connect() as connection:
                 row = connection.execute('SELECT payload FROM platform_registry WHERE id=1').fetchone()
             return json.loads(self.unprotect(row[0]).decode('utf-8')) if row else None
-        except (sqlite3.Error, ValueError, UnicodeError):
-            return None
+        except (sqlite3.Error, ValueError, UnicodeError) as error:
+            raise LoginStorageError('平台管理记录读取失败，已保留原数据库。') from error
 
     def save_platform_registry(self, data):
         payload = self.protect(json.dumps(data, ensure_ascii=False).encode('utf-8'))
@@ -243,16 +216,16 @@ class DatabaseLoginStorage:
             with self.lock, self._connect() as connection:
                 row = connection.execute('SELECT payload FROM checkin_data WHERE id=1').fetchone()
             return json.loads(self.unprotect(row[0]).decode('utf-8')) if row else None
-        except (sqlite3.Error, ValueError, UnicodeError):
-            return None
+        except (sqlite3.Error, ValueError, UnicodeError) as error:
+            raise LoginStorageError('签到数据读取失败，已保留原数据库。') from error
 
     def load_coupon_use_data(self):
         try:
             with self.lock, self._connect() as connection:
                 row = connection.execute('SELECT payload FROM coupon_use_data WHERE id=1').fetchone()
             return json.loads(self.unprotect(row[0]).decode('utf-8')) if row else None
-        except (sqlite3.Error, ValueError, UnicodeError):
-            return None
+        except (sqlite3.Error, ValueError, UnicodeError) as error:
+            raise LoginStorageError('卡券使用记录读取失败，已保留原数据库。') from error
 
     def save_coupon_use_data(self, data):
         payload = self.protect(json.dumps(data, ensure_ascii=False).encode('utf-8'))
@@ -268,8 +241,8 @@ class DatabaseLoginStorage:
             with self.lock, self._connect() as connection:
                 row = connection.execute('SELECT payload FROM monthly_coupon_data WHERE id=1').fetchone()
             return json.loads(self.unprotect(row[0]).decode('utf-8')) if row else None
-        except (sqlite3.Error, ValueError, UnicodeError):
-            return None
+        except (sqlite3.Error, ValueError, UnicodeError) as error:
+            raise LoginStorageError('每月话费券数据读取失败，已保留原数据库。') from error
 
     def save_monthly_coupon_data(self, data):
         payload = self.protect(json.dumps(data, ensure_ascii=False).encode('utf-8'))
@@ -285,8 +258,8 @@ class DatabaseLoginStorage:
             with self.lock, self._connect() as connection:
                 row = connection.execute('SELECT payload FROM star_day_data WHERE id=1').fetchone()
             return json.loads(self.unprotect(row[0]).decode('utf-8')) if row else None
-        except (sqlite3.Error, ValueError, UnicodeError):
-            return None
+        except (sqlite3.Error, ValueError, UnicodeError) as error:
+            raise LoginStorageError('星动日数据读取失败，已保留原数据库。') from error
 
     def save_star_day_data(self, data):
         payload = self.protect(json.dumps(data, ensure_ascii=False).encode('utf-8'))
@@ -313,16 +286,16 @@ class DatabaseLoginStorage:
             result = []
             for login_id, payload in rows:
                 if len(payload) > 128 * 1024:
-                    continue
-                try:
-                    value = json.loads(self.unprotect(payload).decode('utf-8'))
-                    if isinstance(value, dict) and value.get('id') == login_id:
-                        result.append(value)
-                except Exception:
-                    continue
+                    raise ValueError
+                value = json.loads(self.unprotect(payload).decode('utf-8'))
+                if not isinstance(value, dict) or value.get('id') != login_id:
+                    raise ValueError
+                result.append(value)
             return result
-        except Exception:
-            return []
+        except LoginStorageError:
+            raise
+        except (sqlite3.Error, OSError, ValueError, TypeError, UnicodeError) as error:
+            raise LoginStorageError('数据库中的加密登录态读取失败，已保留原数据；请检查数据库或原 Windows 用户。') from error
 
     def save(self, accounts):
         try:
@@ -360,16 +333,16 @@ class DatabaseLoginStorage:
             result=[]
             for task_id,payload in rows:
                 if len(payload)>8*1024*1024:
-                    continue
-                try:
-                    value=json.loads(self.unprotect(payload).decode('utf-8'))
-                    if isinstance(value,dict) and value.get('id')==task_id:
-                        result.append(value)
-                except Exception:
-                    continue
+                    raise ValueError
+                value=json.loads(self.unprotect(payload).decode('utf-8'))
+                if not isinstance(value,dict) or value.get('id')!=task_id:
+                    raise ValueError
+                result.append(value)
             return result
-        except Exception:
-            return []
+        except LoginStorageError:
+            raise
+        except (sqlite3.Error,ValueError,UnicodeError,TypeError) as error:
+            raise LoginStorageError('灵犀任务读取失败，已保留原数据库。') from error
 
     def save_lingxi_tasks(self, tasks):
         try:
