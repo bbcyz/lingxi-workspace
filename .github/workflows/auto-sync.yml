@@ -2,19 +2,52 @@ name: Auto Sync Upstream
 
 on:
   schedule:
-    # 每天北京时间早晨 6:00 自动检查一次上游是否有更新
-    - cron: '0 22 * * *'
-  workflow_dispatch: # 也支持手动点击运行
+    # 每 6 小时自动检测一次原作者是否有更新 (北京时间 04:00, 10:00, 16:00, 22:00)
+    - cron: '0 2,8,14,20 * * *'
+  workflow_dispatch: # 支持在 GitHub 网页随时手动点击测试运行
+
+permissions:
+  contents: write
+  actions: write
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Sync with Upstream
-        uses: aormsby/Fork-Sync-With-Upstream@v3.4.1
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          upstream_sync_repo: pppyl/lingxi-workspace
-          upstream_sync_branch: main
-          target_sync_branch: main
-          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
-          test_mode: false
+          fetch-depth: 0
+
+      - name: Sync upstream changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. 配置 Git 机器人身份
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 2. 拉取原作者仓库最新代码
+          git remote add upstream https://github.com/pppyl/lingxi-workspace.git
+          git fetch upstream main
+
+          # 3. 智能判断：对比两个分支，看原作者是否有新提交
+          LOCAL_COMMIT=$(git rev-parse HEAD)
+          UPSTREAM_COMMIT=$(git rev-parse upstream/main)
+
+          if git merge-base --is-ancestor $UPSTREAM_COMMIT $LOCAL_COMMIT; then
+            echo "已经是最新代码，原作者无新提交，无需更新。"
+            exit 0
+          fi
+
+          echo "检测到原作者有新代码，正在自动合并..."
+          # 4. 自动合并原作者代码（因为我们用了外挂补丁法，此处 100% 顺畅合并）
+          git merge upstream/main -m "chore(sync): 自动同步原作者最新更新" --no-edit
+
+          # 5. 推送到自己的 main 分支
+          git push origin main
+          echo "代码已成功合并推送到您的仓库！"
+
+          # 6. 核心闭环：主动触发 Docker 镜像自动打包构建
+          echo "正在触发 Docker 镜像自动打包..."
+          gh workflow run docker-publish.yml --ref main
