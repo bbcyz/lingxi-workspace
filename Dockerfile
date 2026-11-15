@@ -30,7 +30,7 @@ COPY requirements.txt package.json ./
 COPY recharge/package.json ./recharge/
 
 # 安装 Python 与 Node.js 依赖
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN pip install --no-cache-dir -r requirements.txt requests pillow \
     && npm install --omit=dev \
     && cd recharge && npm install --omit=dev && cd ..
 
