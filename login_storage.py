@@ -19,9 +19,8 @@ def _dpapi(data: bytes, *, decrypt=False) -> bytes:
         from java import jclass
         vault = jclass('cn.pppyl.lingxiworkspace.CredentialVault')
         return bytes(vault.decrypt(data) if decrypt else vault.encrypt(data))
-        if os.name != 'nt':
+    if os.name != 'nt':
         if decrypt:
-            # 兼容：如果数据已经是导过来的纯文本 JSON，直接返回，无需解密
             try:
                 stripped = data.strip()
                 if (stripped.startswith(b'{') and stripped.endswith(b'}')) or (stripped.startswith(b'[') and stripped.endswith(b']')):
@@ -49,6 +48,39 @@ def _dpapi(data: bytes, *, decrypt=False) -> bytes:
                 return f.encrypt(data)
             except Exception as error:
                 raise LoginStorageError('Linux 加密凭据存储异常') from error
+
+    class Blob(ctypes.Structure):
+        _fields_ = [('size', wintypes.DWORD), ('data', ctypes.POINTER(ctypes.c_ubyte))]
+
+    def blob(value):
+        buffer = ctypes.create_string_buffer(value)
+        return Blob(len(value), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))), buffer
+
+    source, source_buffer = blob(data)
+    entropy, entropy_buffer = blob(b'lingxi-web/shared-app-login/v1')
+    output = Blob()
+    crypt = ctypes.WinDLL('crypt32', use_last_error=True)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel.LocalFree.restype = wintypes.HLOCAL
+    if decrypt:
+        function = crypt.CryptUnprotectData
+        function.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.POINTER(Blob),
+                             ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+        args = [ctypes.byref(source), None, ctypes.byref(entropy), None, None, 1, ctypes.byref(output)]
+    else:
+        function = crypt.CryptProtectData
+        function.argtypes = [ctypes.POINTER(Blob), wintypes.LPCWSTR, ctypes.POINTER(Blob),
+                             ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+        args = [ctypes.byref(source), 'Lingxi shared APP sessions', ctypes.byref(entropy), None, None, 1, ctypes.byref(output)]
+    function.restype = wintypes.BOOL
+    if not function(*args):
+        raise LoginStorageError('无法读取本机加密登录态，请使用原 Windows 用户登录或重新验证账号。' if decrypt
+                                else '本机登录态加密失败，账号暂时仅保留在内存中。')
+    try:
+        return ctypes.string_at(output.data, output.size)
+    finally:
+        kernel.LocalFree(ctypes.cast(output.data, wintypes.HLOCAL))
 
     class Blob(ctypes.Structure):
         _fields_ = [('size', wintypes.DWORD), ('data', ctypes.POINTER(ctypes.c_ubyte))]
