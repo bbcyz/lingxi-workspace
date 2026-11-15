@@ -20,7 +20,16 @@ def _dpapi(data: bytes, *, decrypt=False) -> bytes:
         vault = jclass('cn.pppyl.lingxiworkspace.CredentialVault')
         return bytes(vault.decrypt(data) if decrypt else vault.encrypt(data))
     if os.name != 'nt':
-        raise LoginStorageError('当前系统不支持 Windows 登录态加密，账号仅保留在内存中。')
+        from cryptography.fernet import Fernet
+        key_file = Path(os.environ.get('LINGXI_DATA_DIR', '/data')) / '.vault.key'
+        try:
+            if not key_file.exists():
+                key_file.parent.mkdir(parents=True, exist_ok=True)
+                key_file.write_bytes(Fernet.generate_key())
+            f = Fernet(key_file.read_bytes().strip())
+            return f.decrypt(data) if decrypt else f.encrypt(data)
+        except Exception as error:
+            raise LoginStorageError('Linux 加密凭据存储异常') from error
 
     class Blob(ctypes.Structure):
         _fields_ = [('size', wintypes.DWORD), ('data', ctypes.POINTER(ctypes.c_ubyte))]
@@ -111,7 +120,7 @@ class DatabaseLoginStorage:
             with self.lock, self._connect() as connection:
                 row = connection.execute('SELECT payload FROM activity_state WHERE platform_id=?', (platform_id,)).fetchone()
             return json.loads(self.unprotect(row[0]).decode('utf-8')) if row else None
-        except (sqlite3.Error, ValueError, UnicodeError) as error:
+                except (sqlite3.Error, ValueError, UnicodeError, LoginStorageError) as error:
             raise LoginStorageError('活动数据读取失败，已保留原数据库。') from error
 
     def load_access_security(self):
