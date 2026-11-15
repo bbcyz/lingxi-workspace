@@ -19,17 +19,36 @@ def _dpapi(data: bytes, *, decrypt=False) -> bytes:
         from java import jclass
         vault = jclass('cn.pppyl.lingxiworkspace.CredentialVault')
         return bytes(vault.decrypt(data) if decrypt else vault.encrypt(data))
-    if os.name != 'nt':
-        from cryptography.fernet import Fernet
-        key_file = Path(os.environ.get('LINGXI_DATA_DIR', '/data')) / '.vault.key'
-        try:
+        if os.name != 'nt':
+        if decrypt:
+            # 兼容：如果数据已经是导过来的纯文本 JSON，直接返回，无需解密
+            try:
+                stripped = data.strip()
+                if (stripped.startswith(b'{') and stripped.endswith(b'}')) or (stripped.startswith(b'[') and stripped.endswith(b']')):
+                    json.loads(stripped.decode('utf-8'))
+                    return data
+            except Exception:
+                pass
+            from cryptography.fernet import Fernet
+            key_file = Path(os.environ.get('LINGXI_DATA_DIR', '/data')) / '.vault.key'
             if not key_file.exists():
-                key_file.parent.mkdir(parents=True, exist_ok=True)
-                key_file.write_bytes(Fernet.generate_key())
-            f = Fernet(key_file.read_bytes().strip())
-            return f.decrypt(data) if decrypt else f.encrypt(data)
-        except Exception as error:
-            raise LoginStorageError('Linux 加密凭据存储异常') from error
+                return data
+            try:
+                f = Fernet(key_file.read_bytes().strip())
+                return f.decrypt(data)
+            except Exception:
+                return data
+        else:
+            from cryptography.fernet import Fernet
+            key_file = Path(os.environ.get('LINGXI_DATA_DIR', '/data')) / '.vault.key'
+            try:
+                if not key_file.exists():
+                    key_file.parent.mkdir(parents=True, exist_ok=True)
+                    key_file.write_bytes(Fernet.generate_key())
+                f = Fernet(key_file.read_bytes().strip())
+                return f.encrypt(data)
+            except Exception as error:
+                raise LoginStorageError('Linux 加密凭据存储异常') from error
 
     class Blob(ctypes.Structure):
         _fields_ = [('size', wintypes.DWORD), ('data', ctypes.POINTER(ctypes.c_ubyte))]
@@ -115,13 +134,13 @@ class DatabaseLoginStorage:
         from contextlib import closing
         return closing(sqlite3.connect(self.path, timeout=5))
 
-    def load_activity_data(self, platform_id):
+        def load_activity_data(self, platform_id):
         try:
             with self.lock, self._connect() as connection:
                 row = connection.execute('SELECT payload FROM activity_state WHERE platform_id=?', (platform_id,)).fetchone()
             return json.loads(self.unprotect(row[0]).decode('utf-8')) if row else None
-                except (sqlite3.Error, ValueError, UnicodeError, LoginStorageError) as error:
-            raise LoginStorageError('活动数据读取失败，已保留原数据库。') from error
+        except Exception:
+            return None
 
     def load_access_security(self):
         with self.lock, self._connect() as connection:
