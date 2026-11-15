@@ -1,8 +1,10 @@
+# ==========================================
+# 完整版 Dockerfile（无侵入热注入架构）
+# ==========================================
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# 设置环境变量
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -29,22 +31,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt package.json ./
 COPY recharge/package.json ./recharge/
 
-# 安装 Python 与 Node.js 依赖
+# 安装依赖：在此强制追加安装 requests 和 pillow，绝不受上游影响
 RUN pip install --no-cache-dir -r requirements.txt requests pillow \
     && npm install --omit=dev \
     && cd recharge && npm install --omit=dev && cd ..
 
-# 拷贝项目源代码
+# 拷贝原作者的全部源代码
 COPY . .
 
-# 创建持久化数据挂载目录
+# 🌟【核心外挂步骤】：在打包镜像时，自动用 Linux 适配版替换掉原版
+COPY login_storage_linux.py ./login_storage.py
+
+# 创建持久化数据目录
 RUN mkdir -p /data
 
 EXPOSE 5500
 
 VOLUME ["/data"]
 
-# 健康检查
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -f http://127.0.0.1:5500/api/access/status || exit 1
 
