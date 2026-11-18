@@ -28,13 +28,18 @@ import * as M from './task-model.js';
     $('wed-checkin-plan').textContent=state.settings.enabled?`每日 ${state.settings.time} 起自动打卡 · 全部有效账号`:'自动打卡已关闭';
     const rows=scope.map(login=>{
       const record=state.records[login.id]||{},p=record.progress||{},current=p.date===day,month=p.month===day.slice(0,7),working=workingIds.has(login.id);
+      const failedToday=record.state==='failed'&&record.attempt_date===day;
+      const relevantProgress=current||month&&(p.received||p.action==='closed');
       const tr=node('tr'),progress=node('td'),task=node('td'),prize=node('td'),result=node('td','wed-result'),actions=node('td');
-      progress.append(badge(working?'处理中':current?p.status:'今日待查询',record.state==='failed'?'orange':p.today_signed&&current?'green':'blue'),node('small','',`${month?p.streak||0:0} / 7 天`));
+      progress.append(badge(working?'处理中':current?p.status:'今日待查询',failedToday?'orange':p.today_signed&&current?'green':'blue'),node('small','',`${month?p.streak||0:0} / 7 天`));
       task.append(node('span','',month?p.task||'—':'待查询'));if(p.broken&&month)task.append(node('small','','已断签，重新从第1天累计'));
       prize.append(badge(month&&p.received?'本月已领取':month&&p.action==='claim'?'待领取':month&&p.rd_status===5?'本月已抢光':'待满7天',month&&p.received?'green':''));
       if(p.prize&&month)prize.append(node('small','',[p.prize.shortName,p.prize.name,p.prize.subTitle].filter(Boolean).join(' · ')));
-      result.append(node('span','',record.message||'到点后自动核对当日进度'),node('small','',time(p.queried_at)));
-      if(record.state==='failed')result.append(node('small','',record.blocked?'当天自动检查已停止，处理后可主动查询':record.attempts>=5?'今日失败已达5次，明日再检查':`失败 ${record.attempts}/5 次，5分钟后再核对`));
+      const resultMessage=failedToday?record.message:relevantProgress&&(p.message||record.state!=='failed'&&record.message);
+      const resultTime=failedToday?record.attempted_at:p.queried_at;
+      result.append(node('span','',resultMessage||'今日尚未查询'));
+      if(resultTime)result.append(node('small','',`${failedToday?'失败时间':'上次查询'} ${time(resultTime)}`));
+      if(failedToday)result.append(node('small','',record.blocked?'当天自动检查已停止，处理后可主动查询':record.attempts>=5?'今日失败已达5次，明日再检查':`失败 ${record.attempts}/5 次，5分钟后再核对`));
       const wrap=node('div','wed-row-actions'),query=button('查询进度',()=>runCheckins([login]),'secondary');query.disabled=working||login.status!=='active';wrap.append(query);
       if(canSubmitCheckin(record,day)){
         const run=button(current&&p.action==='claim'?'领取8折券':'立即签到',()=>runCheckins([login],true),'secondary');

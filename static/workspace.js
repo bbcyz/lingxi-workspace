@@ -24,7 +24,7 @@
   const pages = [
     ['home','/','工作台'], ['chat','/lingxi','即时对话'],
     ['lingxi-tasks','/lingxi/tasks','定时发送'],
-    ['star-day','/star-day','星动日'],
+    ['star-day','/star-day','星动日'], ['net-age','/net-age','网龄'],
     ['recharge','/recharge/','周三充值日'],
     ['recharge-tasks','/recharge/?tab=tasks','周三充值日'],
     ['checkin','/checkin','签到有礼'],
@@ -55,6 +55,7 @@
     <div class="workspace-nav-label">工作空间</div><nav aria-label="主导航"><a href="/" class="workspace-nav-item${page === 'home' ? ' active' : ''}"${page === 'home' ? ' aria-current="page"' : ''}>${icon('grid')}<span>工作台</span></a>
     ${renderGroup(chatGroup)}
     <a href="/star-day" class="workspace-nav-item${page === 'star-day' ? ' active' : ''}"${page === 'star-day' ? ' aria-current="page"' : ''}>${icon('star')}<span>星动日</span></a>
+    <a href="/net-age" class="workspace-nav-item${page === 'net-age' ? ' active' : ''}"${page === 'net-age' ? ' aria-current="page"' : ''}>${icon('calendar')}<span>网龄</span></a>
     <a href="/recharge/" class="workspace-nav-item${['recharge','recharge-tasks'].includes(page) ? ' active' : ''}"${['recharge','recharge-tasks'].includes(page) ? ' aria-current="page"' : ''}>${icon('recharge')}<span>周三充值日</span></a>
     <a href="/checkin" class="workspace-nav-item${page === 'checkin' ? ' active' : ''}"${page === 'checkin' ? ' aria-current="page"' : ''}>${icon('checkin')}<span>签到有礼</span></a>
     <a href="/monthly-coupon" class="workspace-nav-item${page === 'monthly-coupon' ? ' active' : ''}"${page === 'monthly-coupon' ? ' aria-current="page"' : ''}>${icon('monthly')}<span>每月话费券</span></a>

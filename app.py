@@ -22,6 +22,7 @@ from usage_query import register_usage
 from services_query import register_services
 from mobile_rights import register_mobile_rights
 from member_benefits import register_member_benefits
+from net_age import register_net_age
 from session_maintenance import SessionMaintenance
 from recharge.cmcc import ActivityError
 from lingxi_scheduler import LingxiScheduler, TaskError
@@ -120,6 +121,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
 
     def app_verification_busy(login_id, *, relogin=False):
         return (app.extensions['services_queries'].cancellations.busy_login(login_id)
+                or app.extensions['net_age'].busy_login(login_id)
                 or coupon_uses.busy_login(login_id, discard_previews=relogin))
 
     def refresh_app_credentials(saved, *, force=False, expired_cookie=None):
@@ -1254,6 +1256,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
     register_services(app, unified.public, unified.credentials, recover=recover_activity_identity,
                       accept_credentials=accept_bill_credentials)
     register_member_benefits(app, unified.credentials, credential_cache, recover=recover_activity_identity)
+    register_net_age(app, activity_credentials, unified.public, credential_cache, database, recover_activity_identity)
     register_mobile_rights(app, unified.public, unified.credentials, storage=database, cache=credential_cache,
                            recover=recover_activity_identity, accept_credentials=accept_bill_credentials)
 
