@@ -1,12 +1,274 @@
-// 纯 Node 生成 wasmparams / device token（不启动浏览器）
-// 关键：wasm 通过 wbindgen 传 Request 对象给 fetch，必须解析它的 method/headers/body
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { createCanvas } from "@napi-rs/canvas";
+// Python 进程内的 wheel 0.0.8 运行环境。由 py-mini-racer/V8 执行，无 Node.js 依赖。
+const PY_CONFIG = globalThis.__PY_CONFIG || {};
+const process = {
+  argv: ["python", "wheel_runtime", ...(PY_CONFIG.argv || [])],
+  env: PY_CONFIG.env || {},
+  platform: PY_CONFIG.host_platform || "win32",
+  pid: 0,
+  stderr: { write() {} },
+  stdout: { write() {} },
+  exit() {},
+};
+const os = { cpus: () => Array.from({ length: PY_CONFIG.hardware_concurrency || 28 }, () => ({})) };
+const path = {
+  join: (...parts) => parts.filter(Boolean).join("/"),
+  dirname: () => ".",
+  resolve: (value) => String(value || "."),
+};
+const fileURLToPath = () => ".";
+const pathToFileURL = (value) => ({ href: String(value) });
+
+function encodeUtf8(value) {
+  const text = unescape(encodeURIComponent(String(value)));
+  return Uint8Array.from(text, (char) => char.charCodeAt(0));
+}
+function decodeUtf8(value) {
+  const text = Array.from(new Uint8Array(value), (byte) => String.fromCharCode(byte)).join("");
+  return decodeURIComponent(escape(text));
+}
+class TextEncoderPolyfill { encode(value) { return encodeUtf8(value); } }
+class TextDecoderPolyfill { decode(value) { return decodeUtf8(value || new Uint8Array()); } }
+globalThis.TextEncoder = globalThis.TextEncoder || TextEncoderPolyfill;
+globalThis.TextDecoder = globalThis.TextDecoder || TextDecoderPolyfill;
+
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+globalThis.btoa = globalThis.btoa || ((input) => {
+  let output = "";
+  const value = String(input);
+  for (let block = 0, charCode, index = 0, map = BASE64_ALPHABET;
+       value.charAt(index | 0) || (map = "=", index % 1);
+       output += map.charAt(63 & block >> 8 - index % 1 * 8)) {
+    charCode = value.charCodeAt(index += 3 / 4);
+    if (charCode > 255) throw new TypeError("btoa input is not Latin-1");
+    block = block << 8 | charCode;
+  }
+  return output;
+});
+globalThis.atob = globalThis.atob || ((input) => {
+  const value = String(input).replace(/=+$/, "").replace(/\s+/g, "");
+  let output = "";
+  if (value.length % 4 === 1) throw new TypeError("invalid base64");
+  for (let bc = 0, bs = 0, buffer, index = 0;
+       (buffer = value.charAt(index++));
+       ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer, bc++ % 4)
+         ? output += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0) {
+    buffer = BASE64_ALPHABET.indexOf(buffer);
+  }
+  return output;
+});
+
+class HeadersPolyfill {
+  constructor(init = {}) {
+    this.map = new Map();
+    if (init instanceof HeadersPolyfill) {
+      for (const [name, value] of init) this.set(name, value);
+    } else if (Array.isArray(init)) {
+      for (const pair of init) this.set(pair[0], pair[1]);
+    } else {
+      for (const [name, value] of Object.entries(init || {})) this.set(name, value);
+    }
+  }
+  set(name, value) { this.map.set(String(name).toLowerCase(), String(value)); }
+  append(name, value) {
+    const key = String(name).toLowerCase();
+    this.set(key, this.has(key) ? `${this.get(key)}, ${value}` : value);
+  }
+  get(name) { return this.map.get(String(name).toLowerCase()) ?? null; }
+  has(name) { return this.map.has(String(name).toLowerCase()); }
+  delete(name) { this.map.delete(String(name).toLowerCase()); }
+  entries() { return this.map.entries(); }
+  keys() { return this.map.keys(); }
+  values() { return this.map.values(); }
+  forEach(callback, thisArg) { for (const [k, v] of this.map) callback.call(thisArg, v, k, this); }
+  [Symbol.iterator]() { return this.entries(); }
+}
+globalThis.Headers = HeadersPolyfill;
+
+class URLPolyfill {
+  constructor(value, base = undefined) {
+    let source = String(value);
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(source) && base) {
+      const root = new URLPolyfill(base);
+      source = source.startsWith("/") ? root.origin + source : root.origin + root.pathname.replace(/[^/]*$/, "") + source;
+    }
+    const match = source.match(/^([a-z][a-z0-9+.-]*:)(?:\/\/([^/?#]*))?([^?#]*)(\?[^#]*)?(#.*)?$/i);
+    if (!match) throw new TypeError(`Invalid URL: ${source}`);
+    this.protocol = match[1];
+    this.host = match[2] || "";
+    const hostParts = this.host.split(":");
+    this.hostname = hostParts[0] || "";
+    this.port = hostParts.length > 1 ? hostParts.slice(1).join(":") : "";
+    this.pathname = match[3] || "/";
+    this.search = match[4] || "";
+    this.hash = match[5] || "";
+    this.origin = this.host ? `${this.protocol}//${this.host}` : "null";
+  }
+  get href() { return `${this.origin === "null" ? this.protocol : this.origin}${this.pathname}${this.search}${this.hash}`; }
+  set href(value) { const next = new URLPolyfill(value); Object.assign(this, next); }
+  toString() { return this.href; }
+  toJSON() { return this.href; }
+}
+globalThis.URL = URLPolyfill;
+class URLSearchParamsPolyfill {
+  constructor(init = "") {
+    this.items = [];
+    if (typeof init === "string") {
+      for (const part of init.replace(/^\?/, "").split("&")) {
+        if (!part) continue;
+        const at = part.indexOf("=");
+        this.append(
+          decodeURIComponent(at < 0 ? part : part.slice(0, at)),
+          decodeURIComponent(at < 0 ? "" : part.slice(at + 1)),
+        );
+      }
+    } else if (init && typeof init[Symbol.iterator] === "function") {
+      for (const pair of init) this.append(pair[0], pair[1]);
+    } else {
+      for (const [name, value] of Object.entries(init || {})) this.append(name, value);
+    }
+  }
+  append(name, value) { this.items.push([String(name), String(value)]); }
+  set(name, value) { this.delete(name); this.append(name, value); }
+  get(name) { return this.items.find((item) => item[0] === String(name))?.[1] ?? null; }
+  has(name) { return this.items.some((item) => item[0] === String(name)); }
+  delete(name) { const key = String(name); this.items = this.items.filter((item) => item[0] !== key); }
+  entries() { return this.items[Symbol.iterator](); }
+  [Symbol.iterator]() { return this.entries(); }
+  toString() { return this.items.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&"); }
+}
+globalThis.URLSearchParams = URLSearchParamsPolyfill;
+
+class RequestPolyfill {
+  constructor(input, init = {}) {
+    const previous = input instanceof RequestPolyfill ? input : null;
+    this.url = previous ? previous.url : String(input);
+    this.method = String(init.method || previous?.method || "GET").toUpperCase();
+    this.headers = new HeadersPolyfill(init.headers || previous?.headers || {});
+    this.body = init.body !== undefined ? init.body : previous?.body;
+    this.signal = init.signal || previous?.signal || null;
+  }
+  clone() { return new RequestPolyfill(this); }
+  async text() { return this.body == null ? "" : String(this.body); }
+}
+class ResponsePolyfill {
+  constructor(body = "", init = {}) {
+    this._body = body == null ? "" : body;
+    this.status = Number(init.status || 200);
+    this.statusText = init.statusText || "";
+    this.headers = new HeadersPolyfill(init.headers || {});
+    this.url = init.url || "";
+    this.ok = this.status >= 200 && this.status < 300;
+  }
+  async text() { return typeof this._body === "string" ? this._body : decodeUtf8(this._body); }
+  async json() { return JSON.parse(await this.text()); }
+  async arrayBuffer() { return encodeUtf8(await this.text()).buffer; }
+  clone() { return new ResponsePolyfill(this._body, { status: this.status, statusText: this.statusText, headers: this.headers, url: this.url }); }
+}
+globalThis.Request = RequestPolyfill;
+globalThis.Response = ResponsePolyfill;
+class AbortControllerPolyfill {
+  constructor() { this.signal = { aborted: false }; }
+  abort() { this.signal.aborted = true; }
+}
+globalThis.AbortController = globalThis.AbortController || AbortControllerPolyfill;
+
+let randomState = (PY_CONFIG.random_seed || Date.now()) >>> 0;
+const randomPool = PY_CONFIG.random_pool
+  ? Uint8Array.from(atob(PY_CONFIG.random_pool), (char) => char.charCodeAt(0))
+  : new Uint8Array();
+let randomPoolOffset = 0;
+function nextRandomByte() {
+  if (randomPoolOffset < randomPool.length) return randomPool[randomPoolOffset++];
+  randomState ^= randomState << 13; randomState ^= randomState >>> 17; randomState ^= randomState << 5;
+  return randomState & 255;
+}
+globalThis.crypto = globalThis.crypto || {
+  getRandomValues(target) { for (let i = 0; i < target.length; i += 1) target[i] = nextRandomByte(); return target; },
+  randomUUID() { return randomUUID(); },
+};
+const randomBytes = (length) => crypto.getRandomValues(new Uint8Array(length));
+const randomUUID = () => {
+  const bytes = randomBytes(16);
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+const createHash = () => {
+  let value = "";
+  return {
+    update(data) { value += typeof data === "string" ? data : String(data); return this; },
+    digest() {
+      if (value.startsWith("data:image/png;base64,")) return "ca7db1433e74c16f4d5e662cf8559bf40480ffef6988819e1702f3b4355ca7ee";
+      let hash = 2166136261;
+      for (let i = 0; i < value.length; i += 1) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619) >>> 0;
+      return hash.toString(16).padStart(8, "0").repeat(8);
+    },
+  };
+};
+globalThis.performance = globalThis.performance || { now: () => Date.now() };
+// mini-racer's zero-delay timer path can resolve synchronously and expose a
+// non-Promise Atomics.waitAsync value. A 1 ms floor keeps browser semantics.
+const nativeSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, delay = 0, ...args) =>
+  nativeSetTimeout(() => callback(...args), Math.max(1, Number(delay) || 1));
+globalThis.queueMicrotask = globalThis.queueMicrotask || ((callback) => Promise.resolve().then(callback));
+globalThis.requestAnimationFrame = globalThis.requestAnimationFrame || ((callback) => setTimeout(() => callback(Date.now()), 16));
+globalThis.cancelAnimationFrame = globalThis.cancelAnimationFrame || ((handle) => clearTimeout(handle));
+if (typeof globalThis.setInterval !== "function") {
+  let nextIntervalId = 1;
+  const intervals = new Map();
+  globalThis.setInterval = (callback, delay = 0, ...args) => {
+    const id = nextIntervalId++;
+    const tick = () => {
+      if (!intervals.has(id)) return;
+      callback(...args);
+      intervals.set(id, setTimeout(tick, delay));
+    };
+    intervals.set(id, setTimeout(tick, delay));
+    return id;
+  };
+  globalThis.clearInterval = (id) => {
+    if (intervals.has(id)) clearTimeout(intervals.get(id));
+    intervals.delete(id);
+  };
+}
+
+function createCanvas(width, height) {
+  const context = {
+    fillStyle: "#000000", font: "10px sans-serif", textBaseline: "alphabetic",
+    fillRect() {}, fillText() {}, measureText() { return { width: 10 }; },
+    getImageData() { return { data: new Uint8ClampedArray(4) }; },
+    createLinearGradient() { return { addColorStop() {} }; },
+  };
+  return {
+    width, height,
+    getContext(type) { return type === "2d" ? context : null; },
+    toDataURL() { return PY_CONFIG.canvas_data_url || "data:image/png;base64,iVBORw0KGgo="; },
+  };
+}
+
+async function hostFetch(input, init = {}) {
+  if (typeof globalThis.__py_http_json !== "function") throw new Error("Python HTTP bridge is unavailable");
+  const request = input instanceof RequestPolyfill ? input : new RequestPolyfill(input, init);
+  const raw = await globalThis.__py_http_json(JSON.stringify({
+    url: request.url, method: request.method,
+    headers: Object.fromEntries(request.headers), body: request.body == null ? null : String(request.body),
+  }));
+  const result = JSON.parse(String(raw));
+  if (result.error) throw new Error(result.error);
+  const response = new ResponsePolyfill(result.body || "", {
+    status: result.status || 200, headers: result.headers || {}, url: request.url,
+  });
+  response._transport = result.transport || "python-embedded";
+  return response;
+}
+globalThis.fetch = hostFetch;
+
+const fs = {
+  existsSync() { return false; },
+  readFileSync() { throw new Error("filesystem access is handled by Python"); },
+  mkdirSync() {}, writeFileSync() {}, renameSync() {},
+};
 
 const out = (...a) => process.stderr.write(a.join(" ") + "\n");
 console.log = out;
@@ -87,7 +349,7 @@ Error.prepareStackTrace = (error, frames) => {
   let stack = `${title}\n${frames.map((frame) => `    at ${frame}`).join("\n")}`;
   stack = stack
     .replace(/file:\/\/\/[^)\n]*wheel-0\.0\.8(?:\.trace)?\.mjs/g, GLUE_STACK_URL)
-    .replace(/file:\/\/\/[^)\n]*wheel_node\.mjs/g, APP_STACK_URL);
+    .replace(/python-wheel-runtime\.js/g, APP_STACK_URL);
   STACK_SUMMARIES.push({ length: stack.length, sha256: sha256(stack) });
   traceEnv("error.stack", [stack]);
   return stack;
@@ -109,32 +371,24 @@ if (!Number.isFinite(WHEEL_MIN_LIFETIME_MS) || WHEEL_MIN_LIFETIME_MS < 0 || WHEE
   throw new Error("Wheel 最小生命周期必须在 0..60000ms 之间");
 }
 const EXPLICIT_ASSET_DIR = option("--asset-dir") || process.env.WHEEL_ASSET_DIR;
-const HERE = path.dirname(fileURLToPath(import.meta.url));
+const HERE = ".";
 const GETTOKEN_BRIDGE = process.env.COC_GETTOKEN_BRIDGE || path.join(HERE, "gettoken_transport.py");
 const PYTHON_BRIDGE = process.env.COC_PYTHON_FETCH_BRIDGE || (process.platform === "win32" ? "python" : "python3");
 const PERSISTENT_BRIDGE_URL = process.env.COC_FETCH_BRIDGE_URL || "";
 const PERSISTENT_BRIDGE_TOKEN = process.env.COC_FETCH_BRIDGE_TOKEN || "";
 const USE_NATIVE_FETCH = flag("--native-fetch") || process.env.COC_NATIVE_FETCH === "1";
 function loadEdgeContext() {
-  const contextPath = option("--edge-context-file") || process.env.COC_EDGE_CONTEXT_FILE;
-  if (!contextPath) return null;
-  const resolved = path.resolve(contextPath);
-  const parsed = JSON.parse(fs.readFileSync(resolved, "utf8"));
+  const parsed = PY_CONFIG.edge_context || null;
+  if (!parsed) return null;
   if (parsed?.schema_version !== 1 || !parsed?.environment?.storage) {
     throw new Error("Edge context 文件格式不正确");
   }
-  return { path: resolved, data: parsed };
+  return { path: "python-config", data: parsed };
 }
 const EDGE_CONTEXT = loadEdgeContext();
 function loadDfpCache() {
-  const statePath = process.env.DFP_STATE_PATH || path.join(HERE, ".cache", "dfp-state.json");
-  try {
-    const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-    const cache = typeof state.cache === "string" ? state.cache : "";
-    return /^[0-9a-f]{72}$/.test(cache) ? cache : "";
-  } catch {
-    return "";
-  }
+  const cache = typeof PY_CONFIG.dfp_cache === "string" ? PY_CONFIG.dfp_cache : "";
+  return /^[\x21-\x7e]{45}$|^[\x21-\x7e]{72}$/.test(cache) ? cache : "";
 }
 const DFP_CACHE = loadDfpCache();
 const randomBase36 = (length) => {
@@ -170,7 +424,7 @@ const EDGE_HEADER_ALLOWLIST = new Set([
 const EDGE_HEADERS = Object.fromEntries(Object.entries(EDGE_HEADER_SOURCE)
   .filter(([name]) => EDGE_HEADER_ALLOWLIST.has(String(name).toLowerCase())));
 const BUNDLED_ASSET_DIR = path.join(HERE, "assets", "wheel-0.0.8");
-const ASSET_CACHE = path.resolve(process.env.WHEEL_ASSET_CACHE || path.join(HERE, ".cache", "wheel-0.0.8"));
+const ASSET_CACHE = path.join(HERE, ".cache", "wheel-0.0.8");
 const LEGACY_ASSET_DIR = process.env.TEMP ? path.join(process.env.TEMP, "zmz-wasm") : "/tmp/zmz-wasm";
 const ASSETS = {
   glue: {
@@ -579,42 +833,9 @@ async function collectReq(input, init = {}) {
   return { url, method, headers, body };
 }
 
-function fetchViaPython(url, method, headers, body) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(PYTHON_BRIDGE, [GETTOKEN_BRIDGE], {
-      cwd: HERE,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-      if (stdout.length > 1_000_000) child.kill();
-    });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      try {
-        const result = JSON.parse(stdout);
-        if (code !== 0 || result.error) {
-          reject(new Error(result.error || stderr || `gettoken bridge exited ${code}`));
-          return;
-        }
-        const response = new Response(result.body, {
-          status: result.status,
-          headers: result.headers || { "content-type": "application/json" },
-        });
-        resolve({ response, transport: result.transport || "python-bridge" });
-      } catch (error) {
-        reject(new Error(`invalid gettoken bridge response: ${error.message}`));
-      }
-    });
-    child.stdin.end(JSON.stringify({ url, method, headers, body }));
-  });
+async function fetchViaPython(url, method, headers, body) {
+  const response = await realFetch(url, { method, headers, body });
+  return { response, transport: response._transport || "python-embedded" };
 }
 
 async function fetchViaPersistentBridge(url, method, headers, body) {
@@ -658,7 +879,7 @@ globalThis.fetch = async (input, init = {}) => {
       rec.transport = bridged.transport;
     } else {
       r = await realFetch(url, { method, headers, body });
-      rec.transport = "node-fetch";
+      rec.transport = "python-embedded";
     }
     const text = await r.text();
     rec.status = r.status;
@@ -824,60 +1045,12 @@ if (TRACE_ENV) {
 // ---- web_sys::window() instanceof Window ----
 Object.setPrototypeOf(globalThis, Window.prototype);
 
-// Do not import the glue through a base64 data: URL. The wasm samples
-// Error.stack; a data URL embeds the entire 48 KB module in every stack frame
-// and inflates encryptedText to nearly 1 MB. A short file: URL matches browser
-// stack behaviour much more closely. The .mjs copy only changes Node's module
-// classification; its bytes stay identical to the downloaded glue.
-const resolvedAssets = await resolveAssets();
-fs.mkdirSync(ASSET_CACHE, { recursive: true });
-const esmGluePath = path.join(
-  ASSET_CACHE,
-  TRACE_ENV ? "wheel-0.0.8.trace.mjs" : "wheel-0.0.8.mjs",
-);
-if (TRACE_ENV) {
-  const needle = "const ret = eval(getStringFromWasm0(arg0, arg1));";
-  const original = Buffer.from(resolvedAssets.glue.data).toString("utf8");
-  if (!original.includes(needle)) throw new Error("wheel glue eval bridge changed");
-  const traced = original.replace(
-    needle,
-    "const source = getStringFromWasm0(arg0, arg1); globalThis.__wheelEvalTrace?.(source); const ret = eval(source);",
-  )
-    .replace(
-      "const ret = Object.getOwnPropertyNames(getObject(arg0));",
-      "const target = getObject(arg0); const ret = Object.getOwnPropertyNames(target); globalThis.__wheelObjectTrace?.('names', target, null, ret);",
-    )
-    .replace(
-      "const ret = Object.getOwnPropertyDescriptor(getObject(arg0), getObject(arg1));",
-      "const target = getObject(arg0); const key = getObject(arg1); const ret = Object.getOwnPropertyDescriptor(target, key); globalThis.__wheelObjectTrace?.('descriptor', target, key, ret);",
-    )
-    .replace(
-      "const ret = Object.getPrototypeOf(getObject(arg0));",
-      "const target = getObject(arg0); const ret = Object.getPrototypeOf(target); globalThis.__wheelObjectTrace?.('prototype', target, null, ret);",
-    )
-    .replace(
-      "const ret = Reflect.get(getObject(arg0), getObject(arg1));",
-      "const target = getObject(arg0); const key = getObject(arg1); const ret = Reflect.get(target, key); globalThis.__wheelObjectTrace?.('get', target, key, ret);",
-    )
-    .replace(
-      "const ret = Reflect.has(getObject(arg0), getObject(arg1));",
-      "const target = getObject(arg0); const key = getObject(arg1); const ret = Reflect.has(target, key); globalThis.__wheelObjectTrace?.('has', target, key, ret);",
-    )
-    .replace(
-      "const ret = Object.keys(getObject(arg0));",
-      "const target = getObject(arg0); const ret = Object.keys(target); globalThis.__wheelObjectTrace?.('keys', target, null, ret);",
-    )
-    .replaceAll(
-      "const ret = getObject(arg0).toString();",
-      "const target = getObject(arg0); const ret = target.toString(); globalThis.__wheelToStringTrace?.(target, ret);",
-    );
-  fs.writeFileSync(esmGluePath, traced);
-} else if (!fs.existsSync(esmGluePath) || sha256(fs.readFileSync(esmGluePath)) !== ASSETS.glue.sha256) {
-  fs.writeFileSync(esmGluePath, resolvedAssets.glue.data);
-}
-const mod = await import(pathToFileURL(esmGluePath).href);
-await mod.default(resolvedAssets.wasm.data);
-
+async function __wheel_run() {
+globalThis.__wheel_stage = "wasm-init";
+const mod = globalThis.__wheel_module;
+if (!mod || !globalThis.__wheel_wasm_bytes) throw new Error("wheel glue/WASM 未由 Python 装载");
+await mod.default(globalThis.__wheel_wasm_bytes);
+globalThis.__wheel_stage = "wasm-ready";
 const GT = "https://dev.coc.10086.cn/coc3/gr/risk-ability/wasm/gettoken";
 const res = {
   schema_version: 1,
@@ -889,15 +1062,14 @@ const res = {
     device_pixel_ratio: DEVICE_PIXEL_RATIO, hardware_concurrency: HARDWARE_CONCURRENCY,
     device_memory: DEVICE_MEMORY, max_touch_points: MAX_TOUCH_POINTS,
     touch_event: "ontouchstart" in globalThis, orientation: globalThis.screen.orientation.type,
-    canvas_backend: "@napi-rs/canvas",
+    canvas_backend: "bundled-skia-snapshot",
     wheel_min_lifetime_ms: WHEEL_MIN_LIFETIME_MS,
   },
   assets: {
     version: "0.0.8",
     glue_sha256: ASSETS.glue.sha256,
     wasm_sha256: ASSETS.wasm.sha256,
-    source: resolvedAssets.source_dir === BUNDLED_ASSET_DIR ? "bundled" :
-      resolvedAssets.source_dir === ASSET_CACHE ? "cache" : "local",
+    source: "bundled",
   },
   context: {
     cookie_length: DOCUMENT_COOKIE.length,
@@ -917,20 +1089,23 @@ const res = {
     canvas: LAST_CANVAS_SUMMARY,
     source: EDGE_CONTEXT ? "edge-capture" : "emulated",
   },
-  module_url_kind: "file",
+  module_url_kind: "embedded-v8",
   mock_gettoken: MOCK_GETTOKEN,
 };
 
 try {
   const wheelCreatedAt = Date.now();
   const w = mod.Wheel.create_wheel();
+  globalThis.__wheel_stage = "gettoken";
   const dt = await w.g_dt_with_custom_url(GT, 15000);
+  globalThis.__wheel_stage = "roto-wait";
   const remainingLifetime = WHEEL_MIN_LIFETIME_MS - (Date.now() - wheelCreatedAt);
   if (remainingLifetime > 0) {
     await new Promise((resolve) => setTimeout(resolve, remainingLifetime));
   }
   res.g_dt = typeof dt === "string" ? { len: dt.length } : { type: typeof dt };
   const wp = w.roto_simple(JSON.stringify({}));
+  globalThis.__wheel_stage = "done";
   res.roto_simple = Array.isArray(wp)
     ? { count: wp.length, lens: wp.map((x) => String(x).length),
         ...(EMIT_VALUES ? { value: wp.map(String) } : {}) }
@@ -943,6 +1118,5 @@ res.context.canvas = LAST_CANVAS_SUMMARY;
 res.context.stack_summaries = [...STACK_SUMMARIES];
 res.calls = calls;
 if (TRACE_ENV) res.env_reads = [...new Set(ENV_READS)];
-process.stdout.write(JSON.stringify(res, null, 1) + "\n", (error) => {
-  process.exit(error ? 1 : 0);
-});
+return JSON.stringify(res);
+}

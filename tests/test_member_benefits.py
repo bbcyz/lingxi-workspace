@@ -521,6 +521,27 @@ class MemberBenefitsTests(unittest.TestCase):
         prepared = self.service.discount_prepare('login-a', '1447', benefit['key'], '2191')
         self.assertEqual(prepared['purchase_preview']['price_cents'], 1500)
 
+    def test_android_uses_the_same_gift_and_discount_preparation_flow(self):
+        self.catalog['vipInfoList'][1]['activityInfoList'][0].update(activityId=int(CAMPUS_ACTIVITY))
+        discount = self.add_discount_member()
+
+        with patch.dict('os.environ', LINGXI_ANDROID='1'):
+            self.calls.clear()
+            members = self.service.query('login-a')['members']
+            gift = members[1]['benefits'][0]
+            self.assertEqual(gift['selection']['offers'][0]['id'], '27287')
+            self.assertNotIn('local_order_notice', gift)
+            listed = next(benefit for benefit in members[-1]['benefits'] if benefit['key'] == discount['key'])
+            self.assertEqual([(offer['id'], offer['price_cents']) for offer in listed['selection']['offers']],
+                             [('2192', 1250), ('2191', 1500)])
+            self.assertNotIn('local_order_notice', listed)
+            gift_preparation = self.service.campus_prepare('login-a', '27287')
+            discount_preparation = self.service.discount_prepare('login-a', '1447', discount['key'], '2191')
+
+        self.assertTrue(gift_preparation['preparation_id'])
+        self.assertTrue(discount_preparation['preparation_id'])
+        self.assertFalse(any(url.endswith((CAMPUS_SMS, CAMPUS_ORDER)) for _, url in self.calls))
+
     def test_claimed_names_follow_confirmed_skus_and_look_up_each_missing_name_once(self):
         for member_id, name in ((1447, '黔心选铂金会员'), (1452, '黔心选商超会员')):
             self.add_discount_member(member_id, name)

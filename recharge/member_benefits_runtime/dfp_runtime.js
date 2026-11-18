@@ -1,19 +1,12 @@
-#!/usr/bin/env node
 /**
- * Pure-Node bridge for the page's original const-id.js SDK.
+ * Python embedded-V8 bridge for the page's original const-id.js SDK.
  *
  * stdout is always exactly one JSON document. Diagnostics go to stderr.
  * The device token is redacted unless --emit-token is explicitly supplied.
  */
-import crypto from "node:crypto";
-import fs from "node:fs";
-import https from "node:https";
-import os from "node:os";
-import path from "node:path";
-import vm from "node:vm";
-import { fileURLToPath } from "node:url";
+(function () {
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
+const HERE = ".";
 const SCHEMA_VERSION = 1;
 const SDK_VERSION = "1.1511.0";
 const SDK_URL = "https://res.coc.10086.cn/res/cdn/coc1-online/fixedPath/coc3/rightsmarket-h5-canvas/js/index-private-web.js";
@@ -651,11 +644,15 @@ function createSandbox(config, state, fetchImpl, records) {
 
 async function runSdk(sdkSource, config, state) {
   const records = [];
-  const fetchImpl = config.mockServer ? createMockFetch(state.reusable) : createLegacyCompatibleFetch();
+  const fetchImpl = config.mockServer ? createMockFetch(state.reusable) : globalThis.fetch;
   const env = createSandbox(config, state, fetchImpl, records);
-  const context = vm.createContext(env.sandbox);
-  vm.runInContext(sdkSource, context, { filename: `const-id-v${SDK_VERSION}.js`, timeout: 10_000 });
-  if (!context._zw || typeof context._zw.ConstID !== "function") {
+  for (const [name, value] of Object.entries(env.sandbox)) {
+    if (!["window", "self", "globalThis"].includes(name)) globalThis[name] = value;
+  }
+  globalThis.window = globalThis;
+  globalThis.self = globalThis;
+  (0, eval)(sdkSource + `\n//# sourceURL=const-id-v${SDK_VERSION}.js\n`);
+  if (!globalThis._zw || typeof globalThis._zw.ConstID !== "function") {
     throw new DfpError("sdk_entry_missing", "Verified SDK did not export _zw.ConstID");
   }
   const token = await new Promise((resolve, reject) => {
@@ -664,7 +661,7 @@ async function runSdk(sdkSource, config, state) {
       if (!settled) { settled = true; reject(new DfpError("sdk_timeout", "ConstID callback timed out")); }
     }, Math.max(10_000, config.timeoutMs * 4));
     try {
-      context._zw.ConstID({ appId: config.appId, server: config.server, timeout: config.timeoutMs }, (error, value) => {
+      globalThis._zw.ConstID({ appId: config.appId, server: config.server, timeout: config.timeoutMs }, (error, value) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -683,92 +680,6 @@ async function runSdk(sdkSource, config, state) {
   const cache = env.localStorage.getItem("_zw_kvani5r") || env.cookieJar.get("_zw_kvani5r") || "";
   return { token, cache, records };
 }
-
-function helpResult() {
-  return {
-    schema_version: SCHEMA_VERSION,
-    ok: true,
-    usage: "node dfp_node.mjs [--user-agent UA] [--page-url URL] [--platform NAME] [--mock-server] [--emit-token]",
-    options: {
-      "--user-agent": "Overrides COC_USER_AGENT/DFP_USER_AGENT",
-      "--page-url": "Overrides COC_PAGE_URL/DFP_PAGE_URL",
-      "--platform": "Overrides COC_NAVIGATOR_PLATFORM/COC_PLATFORM/DFP_PLATFORM",
-      "--sdk-path": "Uses an explicit pinned SDK/capture file",
-      "--state-path": "Overrides DFP_STATE_PATH",
-      "--mock-server": "Runs the complete SDK flow without network access",
-      "--emit-token": "Includes gr-risk-p3 in stdout; redacted by default",
-    },
-  };
-}
-
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.help) return helpResult();
-  const config = buildConfig(args);
-  const sdk = await loadSdk(config);
-  const state = loadState(config);
-  const started = Date.now();
-  const run = await runSdk(sdk.source, config, state);
-  const accepted = run.records.some((record) =>
-    record.http_status === 200 && (record.business_status === 1 || record.business_status === 2) && !record.error);
-  if (!accepted) {
-    const failures = run.records.map((record) => record.error ||
-      `HTTP ${record.http_status ?? "?"} / status ${record.business_status ?? "?"}`).join("; ");
-    throw new DfpError("server_not_accepted", `ConstID server did not accept the fingerprint: ${failures}`);
-  }
-  if (typeof run.token !== "string" || run.token.length !== 40) {
-    throw new DfpError("invalid_token", `ConstID returned ${String(run.token || "").length} characters; expected 40`);
-  }
-  const saved = saveState(config, state.fingerprint, run.cache);
-  const result = {
-    schema_version: SCHEMA_VERSION,
-    ok: true,
-    mock: config.mockServer,
-    sdk: {
-      version: SDK_VERSION,
-      sha256: SDK_SHA256,
-      source: sdk.origin,
-    },
-    config: {
-      user_agent: config.userAgent,
-      page_url: config.pageUrl,
-      platform: config.platform,
-      app_id_length: config.appId.length,
-    },
-    state: {
-      path: config.statePath,
-      cache_reused: state.reusable,
-      previous_reason: state.reason,
-      cache_length: run.cache.length,
-      cache_sha256: run.cache ? sha256(run.cache) : null,
-      fast_path_eligible: run.cache.length === 72,
-      persisted: saved,
-    },
-    requests: run.records,
-    result: {
-      token_length: run.token.length,
-      token_sha256: sha256(run.token),
-      elapsed_ms: Date.now() - started,
-    },
-  };
-  if (config.emitToken) result.result["gr-risk-p3"] = run.token;
-  return result;
-}
-
-let output;
-let exitCode = 0;
-try {
-  output = await main();
-} catch (error) {
-  exitCode = 1;
-  output = {
-    schema_version: SCHEMA_VERSION,
-    ok: false,
-    error: {
-      code: error?.code || "unexpected_error",
-      message: String(error?.message || error),
-    },
-  };
-}
-process.stdout.write(JSON.stringify(output) + "\n");
-process.exitCode = exitCode;
+globalThis.__dfp_runtime_run = async (sdkSource, config, state) =>
+  JSON.stringify(await runSdk(String(sdkSource), config, state));
+})();

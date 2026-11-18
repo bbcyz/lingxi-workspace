@@ -40,15 +40,15 @@ Python + Flask 本地网页，默认地址 http://127.0.0.1:5500/ 。
 
 卡券使用按官方协议类型复用，不按面额逐张适配。不同兑换接口、短信模板及待核实记录的处理见 [卡券兑换协议](COUPON_PROTOCOLS.md)。
 
-直接从 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/latest) 下载 `LingxiWorkspace-1.9.0-Windows-x64.exe`，双击运行，可直接转发给其他人。无需安装 Python 或 Node.js，界面在系统默认浏览器中打开；v1.0.1 起不再捆绑 Chrome。周三活动设备组件使用已安装的 Chrome 或 Edge，不读取日常浏览器登录数据。也提供 `LingxiWorkspace-1.9.0-Windows-x64.zip` 文件夹版，完整解压后双击其中的 `LingxiWorkspace.exe`，并保留旁边的 `_internal` 文件夹。
+直接从 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/latest) 下载 `LingxiWorkspace-1.9.1-Windows-x64.exe`，双击运行，可直接转发给其他人。无需安装 Python 或 Node.js，界面在系统默认浏览器中打开；客户端不捆绑浏览器。周三活动和会员权益的设备参数由 Python 调度内嵌 V8 在本机计算。也提供 `LingxiWorkspace-1.9.1-Windows-x64.zip` 文件夹版，完整解压后双击其中的 `LingxiWorkspace.exe`，并保留旁边的 `_internal` 文件夹。
 
 关闭标签页后客户端留在托盘继续执行定时任务，再次运行时复用已打开的页面，右键托盘图标可退出。启动时确认本地页面可访问后才打开浏览器；客户端 Cookie 名称与源码网页服务分离。账号及任务保存在 `%LOCALAPPDATA%\LingxiWorkspace`，与程序文件分离，升级无需搬运账号库。更新前先退出旧版本，首次使用登录自己的手机号。详细说明见 [DESKTOP.md](DESKTOP.md)。
 
-从源代码构建：Windows x64 安装 Python 3.12 与 Node.js，执行 `pip install -r requirements-desktop.txt`、`npm ci --prefix recharge`，再运行 `python build_tools/build_windows.py`。构建脚本只收集列出的资源，不包含 `.local`、开发账号库或测试数据。产物位于 `release/`，外部运行时版本及校验和记录于 `build_tools/runtime-lock.json`。
+从源代码构建：Windows x64 安装 Python 3.12，执行 `pip install -r requirements-desktop.txt`，再运行 `python build_tools/build_windows.py`。构建脚本只收集列出的资源，不包含 `.local`、开发账号库或测试数据。产物位于 `release/`。
 
 ## Android 独立版下载
 
-在 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/latest) 下载 `LingxiWorkspace-1.9.0-Android-arm64.apk`，适用于 Android 7.0+ ARM64 手机。服务、账号和任务在手机本机运行，不需要连接电脑；更新时使用同一签名覆盖安装，保留本机数据。后台任务受系统电池策略影响，详细说明与构建方式见 [ANDROID.md](ANDROID.md)。
+在 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/latest) 下载 `LingxiWorkspace-1.9.1-Android-arm64.apk`，适用于 Android 7.0+ ARM64 手机。服务、账号和任务在手机本机运行，不需要连接电脑；更新时使用同一签名覆盖安装，保留本机数据。后台任务受系统电池策略影响，详细说明与构建方式见 [ANDROID.md](ANDROID.md)。
 
 ## 页面与使用
 
@@ -125,9 +125,9 @@ Python + Flask 本地网页，默认地址 http://127.0.0.1:5500/ 。
 
 选择账号后可开启每天签到，默认北京时间 08:00，可修改。程序启动时检查已开启的账号：已过设定时间且今天未签到就补签；已经签到则跳过。时间尚未到只查询状态。所有写请求先读取官方时间和日历记录，提交标记与结果加密保存在 SQLite 的 `checkin_data`，防止重启或重复点击重发；提交后结果不明时只查询核实，不盲重发。
 
-签到秒杀自动识别官方当前活动。每周场次为免费 1 元话费券，月末场次为免费 2 元话费券，两类领取状态分别按周和月记录。任务按官方场次时间提前 30 秒预热，达到官方开放时间后按间隔尝试。默认每账号 40 次、间隔 0.05 秒、8 个并发线程；三项均可在“配置自动任务”或任务“调整”中修改。页面顶部“秒杀设置”可将单账号默认并发改为 1–32，并同步到已有任务，正在执行的本轮不变。各账号独立使用并发额度，超过单账号并发数的请求排队；如果主轮次仍只有繁忙或尚未开始的回复，在最后一次计划请求的 10 秒后补试一次。退出账号会删除对应签到、秒杀任务、历史及缓存；启动时清理旧版残留。
+签到秒杀自动识别官方当前活动。每周场次为免费 1 元话费券，月末场次为免费 2 元话费券，两类领取状态分别按周和月记录。在“配置自动任务”中可按北京时间设置到秒，默认 12:00，每账号默认 40 次、间隔 50 毫秒。最早提前 90 秒开始准备，同一轮每隔 2 秒启动一个账号的准备流程，所有账号共用 30 次只读 HTTP `Date` 采样的校时结果。每笔请求通过独立的 `threading.Timer` 按计划时间发起，单个账号的在途请求数由配置次数、发起间隔和响应时间决定。退出账号会删除对应签到、秒杀任务、历史及缓存。
 
-当日须已签到、有库存且未达到领取上限。每次重新取当日场次和奖品 ID，不复用前一天的值；未开放或已领时记为跳过。成功、抢完、达到上限、凭据变更或官方要求验证后取消未发送请求，已经发出的请求保留结果；网络中断导致结果不明时只查询核实。每轮提交标记与每次请求结果加密持久化，已提交的轮次重启后不重放，预热中断且尚未发送的本场任务可继续。任务“记录”中可展开查看每次实际发起的毫秒时间与回复。错过官方场次开放时间超过两分钟不会补抢。签到与领券都使用共享池最新 APP 凭据建立活动 SSO，会话中凭据变化时中止本次提交。
+预热时核对当日签到、领取状态以及场次和奖品 ID。本期已经领取的账号在预热阶段跳过。每轮按配置次数发起请求，官方回执决定领取结果。提交标记和每次结果加密保存在本地，按账号和预约时间去重。预热中断且尚未提交的本场任务可在重启后继续，预约时间错过超过两分钟则安排下一轮。执行记录可展开查看每次发起的毫秒时间和回复。
 
 自动任务需要本地服务持续运行，电脑开机、联网且不休眠；关闭浏览器页面不影响客户端托盘中的服务。当前版本已实测 APP SSO、官方日历查询、真实签到及启动补签；12 点领券尚未在线上执行，结果以官方回复为准。
 
@@ -171,15 +171,9 @@ Python + Flask 本地网页，默认地址 http://127.0.0.1:5500/ 。
 
 ## 周三充值日组件
 
-首次安装活动官方设备标识组件：
+活动设备标识使用项目固定版本的官方 SDK，由 Python 调度内嵌 V8 运行，不需要 Node.js、Chrome、WebView 业务脚本或 USB 手机。
 
-```powershell
-npm install --prefix recharge
-```
-
-需要本机 Node.js 和 Chrome。浏览器只运行官方设备标识脚本，不做第二次手机号登录，不需要 USB 手机。
-
-活动使用 APP Cookie 经过 `/qwhdsso/appTokenLogin` 建立官方活动会话，不能用普通微门户网页登录 Cookie 替代。设备标识来自独立临时 Chrome 上下文，不读取日常浏览器资料。
+活动使用 APP Cookie 经过 `/qwhdsso/appTokenLogin` 建立官方活动会话，不能用普通微门户网页登录 Cookie 替代。设备状态按账号写入现有加密凭据库，并按官方有效结果复用。
 
 周三自动领取默认覆盖所有有效共享账号，新增和恢复登录后自动纳入。北京时间周三 07:55 开始准备 APP 凭据和新的活动会话，08:00 开始领取；西藏和新疆仍遵循官方 10 点开放时间。每账号本场最多发起 20 次领取请求，成功即停。提交前临时检查失败不占领取额度，通常按 0.2～1 秒随机间隔继续，连续 20 轮检查未发起领取时，每分钟核对一次直至恢复。提交结果不确定时先查官方状态。无需手动选择账号、连接活动、新建预约或配置时间。
 
@@ -263,7 +257,7 @@ node --test tests/test_lingxi_task_model.mjs
 
 ## Android 独立版
 
-下载发布页中的 `LingxiWorkspace-1.9.0-Android-arm64.apk`，适用 Android 7.0 及以上的 64 位 ARM 手机。安装后直接打开，无需电脑、Python 或 USB。界面通过系统 WebView 展示，Python 服务、SQLite、账号登录和定时任务均在手机内运行；应用仅监听手机回环地址，并由每次启动的随机会话限制访问。
+下载发布页中的 `LingxiWorkspace-1.9.1-Android-arm64.apk`，适用 Android 7.0 及以上的 64 位 ARM 手机。安装后直接打开，无需电脑、Python 或 USB。界面通过系统 WebView 展示，Python 服务、SQLite、账号登录和定时任务均在手机内运行；应用仅监听手机回环地址，并由每次启动的随机会话限制访问。
 
 登录凭据使用 Android Keystore 加密，Windows 仍使用 DPAPI。两端各自保存数据，不会把发布者账号打包，也不自动复制电脑的登录态。同一手机号遵循运营商的单点登录规则。付款始终由用户在官方 APP 手动完成。
 

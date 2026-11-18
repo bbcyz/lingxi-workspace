@@ -1,22 +1,21 @@
 """Fixed-origin client for the observed Wednesday recharge activity."""
 from __future__ import annotations
 
-import atexit
+from hashlib import sha256
 import json
-import os
-import queue
 import re
-import shutil
-import subprocess
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit, urlunsplit, urljoin
 
 from http_transport import requests
 from app_login import AppLoginSession, AppLoginError
+from member_benefits_risk_runtime import run_dfp
 from runtime_paths import RECHARGE_DATA_DIR
+from .device import APP_ID as DEVICE_APP_ID, SERVER as DEVICE_SERVER
 
 ROOT = Path(__file__).resolve().parent
 ENTRY = 'https://wx.10086.cn/hlwyxhdhub/act-wedrecharge/1024101716'
@@ -26,6 +25,7 @@ ENDPOINTS = {'_pub/rec_login', 'queryActivityInfo', 'queryDrawPrizeInfo', 'getPr
              'querySignActInfo', 'signFinishTask', 'receiveSign', 'signList'}
 APP_UA = ('Mozilla/5.0 (Linux; Android 16; 2210132C; wv) AppleWebKit/537.36 '
           '(KHTML, like Gecko) Version/4.0 Chrome/145.0.0.0 Mobile Safari/537.36 leadeon/12.5.6')
+DEVICE_STATE_SCOPE = 'wednesday-recharge-dfp-state'
 RD_STATES = {0: '已参与', 1: '可参与', 2: '未中奖', 3: '发放中', 4: '去使用',
              5: '已使用', 6: '未到活动日', 7: '尚未开始', 10: '已锁定'}
 
@@ -109,75 +109,26 @@ def public_prize(prize):
     return {key: prize[key] for key in fields if key in prize}
 
 
-class BrowserBridge:
+class PythonRiskBridge:
+    """Compatibility lifecycle for account cleanup after the browser runtime was removed."""
     def __init__(self, profile_dir=None):
-        self.profile_dir = Path(profile_dir or RECHARGE_DATA_DIR/'browser-profile').resolve()
+        self.profile_dir = Path(profile_dir or RECHARGE_DATA_DIR / 'device-state').resolve()
         self.process = None
-        self.lock = threading.Lock()
-        self.lines = queue.Queue()
-        self.serial = 0
 
-    def _read(self, process, target):
-        for line in process.stdout:
-            try:
-                target.put(json.loads(line))
-            except ValueError:
-                continue
-        target.put(None)
-
-    def rpc(self, command, **params):
-        with self.lock:
-            if self.process is None or self.process.poll() is not None:
-                node = os.environ.get('CMCC_NODE_PATH') or shutil.which('node')
-                if not node or not (ROOT / 'node_modules/playwright-core').exists():
-                    raise ActivityError('浏览器组件未安装，请运行 npm install', 'BROWSER_MISSING', 503)
-                flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-                self.process = subprocess.Popen([node, str(ROOT / 'browser_bridge.mjs')], cwd=ROOT,
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    text=True, encoding='utf-8', creationflags=flags,
-                    env={**os.environ, 'CMCC_PROFILE_DIR': str(self.profile_dir)})
-                self.lines = queue.Queue()
-                threading.Thread(target=self._read, args=(self.process, self.lines), daemon=True).start()
-            self.serial += 1
-            request_id = self.serial
-            try:
-                self.process.stdin.write(json.dumps({'id': request_id, 'command': command, **params}) + '\n')
-                self.process.stdin.flush()
-                deadline = time.monotonic() + 40
-                while True:
-                    reply = self.lines.get(timeout=max(0.01, deadline - time.monotonic()))
-                    if reply is None:
-                        raise ActivityError('浏览器组件已退出，请重新打开官方登录窗口', 'BROWSER_CLOSED', 503)
-                    if reply.get('id') == request_id:
-                        break
-                    if time.monotonic() >= deadline:
-                        raise queue.Empty
-            except (queue.Empty, BrokenPipeError, OSError):
-                raise ActivityError('浏览器响应超时，请检查官方窗口；领取请求不会自动重试', 'BROWSER_TIMEOUT', 504)
-            if not reply.get('ok'):
-                code = reply.get('code', 'BROWSER_ERROR')
-                raise ActivityError(reply.get('error', '浏览器调用失败'), code, 502,
-                                    retryable=False if code == 'HTTP_ACCESS_LIMIT' else None)
-            return reply['result']
+    def rpc(self, command, **_params):
+        if command in ('close', 'logout'):
+            return {'open': False}
+        raise ActivityError('本地设备计算不支持该操作', 'INVALID_DEVICE_OPERATION', 409)
 
     def stop(self):
-        if self.process and self.process.poll() is None:
-            try:
-                self.rpc('close')
-                self.process.wait(timeout=5)
-            except Exception:
-                self.process.terminate()
+        return None
 
 
 class ActivityClient:
     def __init__(self, profile_dir=None, *, app_credentials_provider=None, credential_cache=None):
         self.mode = 'none'
         self.http = requests.Session(impersonate='chrome')
-        if os.environ.get('LINGXI_ANDROID') == '1':
-            from android_activity_bridge import AndroidActivityBridge
-            self.bridge = AndroidActivityBridge(profile_dir)
-        else:
-            self.bridge = BrowserBridge(profile_dir)
+        self.bridge = PythonRiskBridge(profile_dir)
         self.const_id = ''
         self.last_claim = 0.0
         self.uncertain = False
@@ -192,7 +143,6 @@ class ActivityClient:
         self.app_credentials_provider = app_credentials_provider
         self.credential_cache = credential_cache
         self.app_credential_revision = None
-        atexit.register(self.bridge.stop)
 
     def send_sms(self, phone):
         try:
@@ -348,8 +298,8 @@ class ActivityClient:
         try:
             if self.bridge.process and self.bridge.process.poll() is None:
                 self.bridge.rpc('logout')
-            # Browser cleanup can block. Recheck after that boundary before
-            # publishing the candidate as this account's active session.
+            # Keep a credential-revision boundary around any active legacy
+            # session cleanup while old installations migrate to pure compute.
             self._check_current_credentials(cookie, phone, profile, input_revision)
         except Exception:
             candidate.close()
@@ -364,21 +314,63 @@ class ActivityClient:
         return self.cached_user if raw else self.public_identity(self.cached_user)
 
     def open_login(self, url=None):
-        result = self.bridge.rpc('open', url=validate_entry(url), visible=True, login=True)
-        self.mode = 'browser'
-        self.const_id = ''
-        self.cached_user = None
-        return result
+        validate_entry(url)
+        raise ActivityError('请在账号管理中完成 APP 短信登录，活动会复用该账号。',
+                            'APP_LOGIN_REQUIRED', 401)
 
     def ensure_browser(self):
-        if not self.bridge.rpc('info').get('open'):
-            if self.mode == 'app':
-                cookies = [{'name': c.name, 'value': c.value, 'domain': c.domain or 'wx.10086.cn',
-                            'path': c.path or '/', 'secure': c.secure} for c in self.http.cookies.jar]
-                self.bridge.rpc('app_session', cookies=cookies, user_agent=APP_UA)
-            else:
-                self.bridge.rpc('open', visible=False, login=False)
-            self.const_id = ''
+        self.const_id = self._device_identifier()
+
+    def _device_identifier(self):
+        phone = str((self.app_material or {}).get('phone') or
+                    (self.cached_user or {}).get('phone') or
+                    (self.cached_user or {}).get('mobile') or '')
+        account_key = sha256((phone + '|' + DEVICE_APP_ID).encode()).hexdigest()[:24]
+        storage = getattr(self.credential_cache, 'storage', None)
+        saved = (storage.load_activity_data(DEVICE_STATE_SCOPE) or {}) if storage else {}
+        RECHARGE_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        def request(payload):
+            url = str(payload.get('url') or '')
+            method = str(payload.get('method') or 'GET').upper()
+            # The SDK can append an empty query delimiter to the configured endpoint.
+            if url not in (DEVICE_SERVER, DEVICE_SERVER + '?') or method not in ('GET', 'POST'):
+                raise ValueError('设备认证拒绝了非预期接口')
+            headers = {str(key): str(value) for key, value in (payload.get('headers') or {}).items()
+                       if str(key).lower() not in ('host', 'content-length', 'connection')}
+            body = payload.get('body')
+            kwargs = {'headers': headers, 'timeout': 20, 'allow_redirects': False}
+            if body is not None:
+                kwargs['data'] = str(body).encode()
+            response = self.http.request(method, DEVICE_SERVER, **kwargs)
+            return {'status': response.status_code,
+                    'headers': {'content-type': response.headers.get('content-type', 'application/json'),
+                                'etag': response.headers.get('etag', '')},
+                    'body': response.text, 'transport': 'python-native'}
+
+        try:
+            with TemporaryDirectory(dir=RECHARGE_DATA_DIR) as temporary:
+                state = Path(temporary) / 'dfp-state.json'
+                if isinstance(saved.get(account_key), dict):
+                    state.write_text(json.dumps(saved[account_key], ensure_ascii=False), encoding='utf-8')
+                result = run_dfp(
+                    user_agent=APP_UA,
+                    page_url='https://wx.10086.cn/hlwyxhdhub/act-wedrecharge/index.html',
+                    platform='Linux armv8l', state_path=state,
+                    app_id=DEVICE_APP_ID, server=DEVICE_SERVER, http_bridge=request,
+                )
+                if storage and result['state']['persisted']:
+                    current = json.loads(state.read_text(encoding='utf-8'))
+                    with storage.lock:
+                        latest = storage.load_activity_data(DEVICE_STATE_SCOPE) or {}
+                        storage.save_activity_data(DEVICE_STATE_SCOPE, {**latest, account_key: current})
+        except Exception as error:
+            raise ActivityError('官方设备认证未完成，请稍后主动刷新',
+                                'DEVICE_AUTH_FAILED', 503, retryable=True) from error
+        token = (result.get('result') or {}).get('gr-risk-p3')
+        if not isinstance(token, str) or len(token) != 40:
+            raise ActivityError('官方设备认证未返回有效标识', 'DEVICE_AUTH_FAILED', 503)
+        return token
 
     def server_now(self):
         if self.clock_anchor:
@@ -421,9 +413,6 @@ class ActivityClient:
     def call(self, endpoint, body=None):
         if endpoint not in ENDPOINTS:
             raise ActivityError('不支持的接口', 'INVALID_ENDPOINT')
-        if self.mode == 'browser':
-            self.ensure_browser()
-            return self.bridge.rpc('api', endpoint=endpoint, body=body or {})
         if self.mode not in {'cookie', 'app'}:
             raise ActivityError('请先登录中国移动', 'LOGIN_REQUIRED', 401)
         headers = {'Content-Type': 'application/json;charset=UTF-8', 'login-check': '1',
@@ -532,9 +521,8 @@ class ActivityClient:
                      prize=public_prize(data.get('getPrize')),
                      coupons=[{k: str(p.get(k, '')) for k in ('title', 'name', 'subTitle')}
                               for p in (user.get('Seckillnfos') or []) if isinstance(p, dict)])
-        if self.mode in {'browser', 'app'} and not self.const_id:
+        if self.mode in {'cookie', 'app'} and not self.const_id:
             self.ensure_browser()
-            self.const_id = self.bridge.rpc('risk').get('const_id', '')
         state['device_ready'] = bool(self.const_id)
         # An explicit refresh can resolve a previous uncertain submission after a short settling interval.
         if self.uncertain and (automatic and (state['rd_status'] in {0, 1, 2, 3, 4, 5} or state['prize'])
@@ -546,7 +534,7 @@ class ActivityClient:
             state['reason'] = '上次提交结果待确认，10 秒后刷新本场状态与我的奖品'
         elif state['can_claim'] and not self.const_id:
             state['can_claim'] = False
-            state['reason'] = '等待官方设备标识；请保持官方活动页打开后刷新'
+            state['reason'] = '等待官方设备标识，请稍后刷新'
         return state
 
     def prizes(self):
@@ -591,8 +579,6 @@ class ActivityClient:
         if self.credential_cache is not None and getattr(self.http,'_credential_binding',None):
             _,snapshot,_,_,_ = self.http._credential_binding
             self.credential_cache.forget(self.credential_cache.account(snapshot),scope='wed-recharge')
-        if self.bridge.process and self.bridge.process.poll() is None:
-            self.bridge.rpc('logout')
         self.http.close()
         self.http = requests.Session(impersonate='chrome')
         self.mode, self.const_id, self.uncertain = 'none', '', False

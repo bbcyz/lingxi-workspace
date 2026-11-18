@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 from flask import Flask
 
+from app_login import LOGIN_SLIDER_APP_ID
 from coupon_captcha import APP_ID, OFFICIAL_ORIGIN, register_coupon_captcha
 from http_transport import requests
 
@@ -107,7 +108,18 @@ class CouponCaptchaTests(unittest.TestCase):
             self.assertEqual(self.client.get('/coupon-verification/mgt/decision-captcha/api/'+name).status_code, 405)
             self.assertEqual(self.client.post('/coupon-verification/mgt/decision-captcha/api/'+name).status_code, 200)
         self.assertEqual(self.client.get('/coupon-verification/mgt/decision-captcha/api/logo/'+APP_ID).status_code, 200)
+        self.assertEqual(self.client.get('/coupon-verification/mgt/decision-captcha/api/logo/'+LOGIN_SLIDER_APP_ID).status_code, 200)
         self.assertEqual(self.client.post('/coupon-verification/mgt/decision-captcha/zw-captcha/index.js').status_code, 405)
+
+    def test_login_slider_uses_the_official_m1_device_endpoint(self):
+        response = self.client.get('/coupon-verification/mgt/decision-engine/udid/m1',
+            base_url='http://localhost:5500', headers={
+                'appId': LOGIN_SLIDER_APP_ID, 'param': 'official-sdk-output'})
+        self.assertEqual(response.status_code, 200)
+        method, url, options = self.session.calls[-1]
+        self.assertEqual((method, url), ('GET', OFFICIAL_ORIGIN+'/mgt/decision-engine/udid/m1'))
+        self.assertEqual(options['headers']['appId'], LOGIN_SLIDER_APP_ID)
+        self.assertEqual(options['headers']['param'], 'official-sdk-output')
 
     def test_upstream_rejection_is_preserved_and_redirect_is_never_followed(self):
         self.session.response.status_code = 403

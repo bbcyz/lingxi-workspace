@@ -44,9 +44,6 @@ def main():
         running_command('open');return
     handler=RotatingFileHandler(DATA_DIR/'desktop.log',maxBytes=2*1024*1024,backupCount=2,encoding='utf-8')
     logging.basicConfig(handlers=[handler],level=logging.WARNING)
-    os.environ['CMCC_NODE_PATH']=str(ROOT/'runtime/node/node.exe')
-    if not Path(os.environ['CMCC_NODE_PATH']).is_file():
-        raise RuntimeError('客户端运行组件缺失，请完整解压 ZIP 后启动，不要单独移动 EXE。')
     from app import app
     app.config['SESSION_COOKIE_NAME']='lingxi_desktop_session'
     app.extensions['recharge_app'].config['SESSION_COOKIE_NAME']='lingxi_desktop_recharge_session'

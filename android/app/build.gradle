@@ -1,5 +1,8 @@
 plugins { id 'com.android.application'; id 'com.chaquo.python' }
-dependencies { implementation 'com.squareup.okhttp3:okhttp:4.12.0' }
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.caoccao.javet:javet-android:3.0.4'
+}
 android {
     namespace 'cn.pppyl.lingxiworkspace'
     compileSdk 35
@@ -7,8 +10,8 @@ android {
         applicationId 'cn.pppyl.lingxiworkspace'
         minSdk 24
         targetSdk 35
-        versionCode 190
-        versionName '1.9.0'
+        versionCode 191
+        versionName '1.9.1'
         ndk { abiFilters 'arm64-v8a' }
     }
     signingConfigs {

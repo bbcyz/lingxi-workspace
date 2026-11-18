@@ -16,6 +16,7 @@ async function portalApi(path, body) {
   const data = await response.json();
   if (!response.ok) throw Object.assign(new Error(data.error || '操作失败，请重试。'), {
     code:data.code, sms:data.sms, retryAfter:data.retry_after,
+    sliderRequired:data.slider_required, sliderChallenge:data.slider_challenge,
   });
   return data;
 }
@@ -27,6 +28,23 @@ function node(tag, className, text) {
   const item = document.createElement(tag); item.className = className || '';
   if (text !== undefined) item.textContent = text;
   return item;
+}
+function clearLoginSlider() {
+  byId('login-slider-required').hidden = true;
+  byId('login-slider-frame').replaceChildren();
+}
+function showLoginSlider(key, challenge = {}) {
+  const appId = /^[a-f0-9]{32}$/.test(challenge.app_id || '')
+    ? challenge.app_id : '02aecbb71abe2113e42a602056797e09';
+  const devicePath = ['m1','c1'].includes(challenge.device_path) ? challenge.device_path : 'm1';
+  const frame = node('iframe');
+  frame.title = '中国移动登录滑块验证';
+  frame.dataset.smsKey = key;
+  frame.src = '/static/coupon-captcha.html?' + new URLSearchParams({
+    app_id: appId, device_path: devicePath, context: 'login',
+  });
+  byId('login-slider-frame').replaceChildren(frame);
+  byId('login-slider-required').hidden = false;
 }
 async function refreshPool() {
   const data = await portalApi('/api/logins');
@@ -114,6 +132,7 @@ function smsCountdown() {
   byId('login-slider-required').hidden = !attempt?.sliderRequired;
 }
 function setRelogin(record = null) {
+  clearLoginSlider();
   reloginId = record ? record.id : '';
   byId('login-identity').hidden = !!reloginId;
   byId('login-identity').disabled = !!reloginId;
@@ -160,17 +179,36 @@ async function sendManagerSms(resend = false) {
 function acceptSms(key,result) {
   const now=Date.now();
   smsAttempts.set(key,{requestId:result.sms_request_id,readyAt:now+result.retry_after*1000,
-    expiresAt:now+(result.expires_in??600)*1000,sliderRequired:result.slider_required===true});
+    expiresAt:now+(result.expires_in??600)*1000,sliderRequired:result.slider_required===true,
+    sliderChallenge:result.slider_challenge,sliderToken:''});
   if(reloginId)byId('login-panel-description').textContent='请填写 '+result.phone_masked+' 最近收到的登录验证码。';
   byId('code').value='';
+  if(result.slider_required)showLoginSlider(key,result.slider_challenge);
+  else clearLoginSlider();
   smsCountdown();
 }
 if (isManager) {
+  window.addEventListener('message', event => {
+    const frame=byId('login-slider-frame').querySelector('iframe');
+    const key=smsKey(),attempt=smsAttempts.get(key);
+    if(!frame||event.source!==frame.contentWindow||event.origin!==location.origin||frame.dataset.smsKey!==key)return;
+    if(event.data?.type==='login-captcha-size'){
+      const {height}=event.data;
+      if(Number.isFinite(height)&&height>0)frame.style.height=height+'px';
+      return;
+    }
+    const token=event.data?.type==='login-captcha-success'?event.data.token:'';
+    if(!attempt?.sliderRequired||typeof token!=='string'||!token||token.length>4096)return;
+    smsAttempts.set(key,{...attempt,sliderRequired:false,sliderToken:token});
+    clearLoginSlider();smsCountdown();
+    portalFeedback('滑块验证已完成，正在继续登录…',true);
+    byId('manager-login-form').requestSubmit();
+  });
   byId('cancel-relogin').addEventListener('click', () => {
     const id=reloginId;setRelogin();portalFeedback('');onReloginCancel?.(id);
   });
   byId('phone').addEventListener('input', () => {
-    byId('code').value='';smsCountdown();
+    byId('code').value='';clearLoginSlider();smsCountdown();
   });
   byId('refresh-accounts').addEventListener('click', () => refreshPool().catch(error => portalFeedback(error.message)));
   byId('send-sms').addEventListener('click', () => {
@@ -184,14 +222,17 @@ if (isManager) {
     managerAction(async () => {
       portalFeedback(relogging ? '正在重新登录并更新共享凭据…' : '正在登录并加入共享账号池…');
       const identity=relogging?{id:reloginId,force:true}:{phone:key,name:byId('login-name').value.trim()};
+      const sliderToken=attempt.sliderToken||'';
+      if(sliderToken)smsAttempts.set(key,{...attempt,sliderToken:''});
       let result;
       try{
         result=await portalApi(relogging?'/api/logins/relogin':'/api/logins/login',
-          {...identity,code:byId('code').value.trim(),sms_request_id:attempt.requestId});
+          {...identity,code:byId('code').value.trim(),sms_request_id:attempt.requestId,slider_token:sliderToken});
       }catch(error){
-        if(error.code==='214100'){
-          smsAttempts.set(key,{...attempt,sliderRequired:true});
-          byId('code').value='';
+        if(error.code==='214100'&&error.sliderRequired!==false){
+          smsAttempts.set(key,{...attempt,sliderRequired:true,sliderToken:'',sliderChallenge:error.sliderChallenge});
+          showLoginSlider(key,error.sliderChallenge);
+          smsCountdown();
           portalFeedback('');
           return;
         }
@@ -203,6 +244,7 @@ if (isManager) {
         throw error;
       }
       smsAttempts.delete(key);
+      clearLoginSlider();
       if(relogging)setRelogin();
       else byId('manager-login-form').reset();
       portalFeedback(relogging ? result.message : '账号已加入，灵犀和周三充值日均可选择使用。', true);

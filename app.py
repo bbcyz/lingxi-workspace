@@ -13,7 +13,8 @@ from flask import Flask, Response, jsonify, render_template, request, session, s
 from http_transport import RequestException
 
 from lingxi_client import Account, LingxiError, chat, exchange_cookie, verify_token
-from app_login import AppLoginError, AppLoginSession, AppCredentialError, SMS_VALID_SECONDS
+from app_login import (AppLoginError, AppLoginSession, AppCredentialError, SMS_VALID_SECONDS,
+                       SLIDER_REQUIRED_CODE, LOGIN_SLIDER_APP_ID, LOGIN_SLIDER_DEVICE_PATH)
 from unified_logins import UnifiedLogins
 from login_storage import DatabaseLoginStorage, LoginStorageError
 from bill_query import register_bills
@@ -370,9 +371,8 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                 required = isinstance(error,AppCredentialError) and error.login_required
                 raise CouponError(str(error),'APP_LOGIN_REQUIRED' if required else 'APP_REFRESH_FAILED',401 if required else 502) from error
 
-    # This wallet entry was supplied by the user (dx.10086.cn/A/aIU7Gw).
-    # Its public deep-link channel applies to operations entered through this URL,
-    # independently of the account's private APP login cookie.
+    # The wallet entry's public deep-link channel applies independently of
+    # the account's private APP login cookie.
     coupon_uses = CouponUseManager(coupon_credentials, storage=database,
         payment_credentials_provider_by_id=unified.credentials,
         wallet_entry='https://touch.10086.cn/i/mobile/mycoupons.html?channelId=P00000004912',credential_cache=credential_cache,
@@ -673,6 +673,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
             return jsonify(error='请输入正确的 11 位手机号。'), 400
         manage = request.path.startswith('/api/logins/')
         current = account()
+        flow = None
         held_lock = login_operation_lock(current, manage)
         if not held_lock.acquire(blocking=False):
             return jsonify(error="正在登录或接收回复，请稍候。"), 409
@@ -758,7 +759,9 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                         message = '验证码已更新，请填写最近收到的验证码。' if latest else '本次验证码已失效，请重新获取。'
                         return jsonify(error=message, code='SMS_FLOW_CHANGED', sms=latest), 409
                     flow = pending if pending is not None else login_flow()
-                    cookie = flow.login(phone, code)
+                    slider_token = value.get('slider_token')
+                    cookie = (flow.login(phone, code, slider_token=slider_token) if slider_token
+                              else flow.login(phone, code))
                     token = ''
                     if features.enabled('lingxi'):
                         from feature_runtime import FeatureLease, feature_scope
@@ -779,7 +782,13 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                 login_flows.pop(session["sid"], None)
             return jsonify(account=saved.public(), message='账号已重新登录，任务绑定和备注已保留' if relogin else '账号已加入共享账号池') if manage else jsonify(**current.status(), login_id=saved.id)
         except AppLoginError as exc:
-            return jsonify(error=str(exc), code=exc.code), 400
+            result = {'error': str(exc), 'code': exc.code}
+            if exc.code == SLIDER_REQUIRED_CODE and flow is not None:
+                result['slider_required'] = flow.slider_required
+                if flow.slider_required:
+                    result['slider_challenge'] = {'app_id': LOGIN_SLIDER_APP_ID,
+                                                  'device_path': LOGIN_SLIDER_DEVICE_PATH}
+            return jsonify(result), 400
         except LingxiError as exc:
             return jsonify(error=str(exc)), 400
         except RequestException:
@@ -1132,21 +1141,33 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                 raise TaskError('账号校验未通过，请校验并重连后重新预约') from error
 
     def send_scheduled_chat(login_id,content,on_sent):
+        def ready_credentials():
+            with unified.lock:
+                current=unified.get_id(login_id)
+                if current is None:
+                    raise TaskError('共享账号已退出，本次未发送')
+                if current.status=='login_required':
+                    raise TaskError('共享账号需要重新验证，本次未发送')
+                missing=not current.token
+            if missing:
+                try:ensure_token(current)
+                except (AppLoginError,LingxiError,RequestException) as error:
+                    raise TaskError('共享账号恢复未完成，本次未发送') from error
+            with unified.lock:
+                current=unified.get_id(login_id)
+                if current is None or current.status=='login_required' or not current.token:
+                    raise TaskError('共享账号恢复未完成，本次未发送')
+                return current,current.credential_revision,current.token
+
+        saved,revision,token=ready_credentials()
         with unified.lock:
-            saved=unified.get_id(login_id)
-            if saved is None or saved.status=='login_required' or not saved.token:
-                raise TaskError('共享账号尚未就绪，本次未发送')
-            revision=saved.credential_revision;token=saved.token
             target=Account(auth_code=token,verified=True,app_phone=saved.phone)
         # Independent conversations allow the next scheduled request to start
         # while the previous one is still streaming its reply.
         def before_send():
-            nonlocal revision,token
+            nonlocal saved,revision,token
+            saved,revision,token=ready_credentials()
             with unified.lock:
-                latest=unified.get_id(login_id)
-                if latest is None or latest.status=='login_required' or not latest.token:
-                    raise TaskError('共享账号已退出或正在更新，本次未发送')
-                revision,token=latest.credential_revision,latest.token
                 target.auth_code=token
                 on_sent()
         try:yield from chat(target,content,before_send=before_send)

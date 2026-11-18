@@ -14,8 +14,8 @@ BUILTINS = (
     ('checkin', '签到有礼', '/checkin', ('/checkin', '/api/checkin')),
     ('monthly-coupon', '每月话费券', '/monthly-coupon', ('/monthly-coupon', '/api/monthly-coupon')),
     ('coupons', '我的卡券', '/coupons', ('/coupons', '/api/coupons', '/coupon-verification')),
-    ('mobile-rights', '移动权益', '/mobile-rights', ('/mobile-rights', '/api/mobile-rights')),
-    ('member-benefits', '会员权益', '/member-benefits', ('/member-benefits', '/api/member-benefits')),
+    ('mobile-rights', '权益领取', '/mobile-rights', ('/mobile-rights', '/api/mobile-rights')),
+    ('member-benefits', '会员领取', '/member-benefits', ('/member-benefits', '/api/member-benefits')),
     ('bills', '信息查询', '/information', ('/information', '/bills', '/api/bills', '/api/usage', '/api/services')),
 )
 

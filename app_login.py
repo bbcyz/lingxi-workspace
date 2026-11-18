@@ -44,7 +44,9 @@ AUTH_REFRESH_PATH = "/biz-orange/LN/newuamauthlogin/login"
 SMS_COOLDOWN_SECONDS = 60
 SMS_VALID_SECONDS = 600
 SLIDER_REQUIRED_CODE = '214100'
-SLIDER_REQUIRED_MESSAGE = '中国移动要求完成官方滑块验证（214100，中风险）。请在手机中国移动 APP 完成验证。'
+SLIDER_REQUIRED_MESSAGE = '中国移动要求完成官方滑块验证（214100，中风险）。'
+LOGIN_SLIDER_APP_ID = '02aecbb71abe2113e42a602056797e09'
+LOGIN_SLIDER_DEVICE_PATH = 'm1'
 
 
 class AppLoginError(Exception):
@@ -305,11 +307,15 @@ class AppLoginSession:
 
     def sms_status(self, *, reused=False):
         age = time.monotonic() - self.sms_sent_at
-        return {'sent': True, 'phone_masked': self.phone[:3]+'****'+self.phone[-4:],
+        result = {'sent': True, 'phone_masked': self.phone[:3]+'****'+self.phone[-4:],
                 'sms_request_id': self.sms_request_id, 'sms_reused': reused,
                 'slider_required': self.slider_required,
                 'retry_after': max(0, ceil(SMS_COOLDOWN_SECONDS-age)),
                 'expires_in': max(0, ceil(SMS_VALID_SECONDS-age))}
+        if self.slider_required:
+            result['slider_challenge'] = {'app_id': LOGIN_SLIDER_APP_ID,
+                                          'device_path': LOGIN_SLIDER_DEVICE_PATH}
+        return result
 
     def send_sms(self, phone: str):
         if not isinstance(phone, str) or not re.fullmatch(r"1[3-9][0-9]{9}", phone):
@@ -334,7 +340,7 @@ class AppLoginSession:
         self.sms_request_id = secrets.token_urlsafe(18)
         return self.sms_status()
 
-    def login(self, phone: str, code: str) -> str:
+    def login(self, phone: str, code: str, *, slider_token: str = '') -> str:
         if not self.phone or phone != self.phone:
             raise AppLoginError("请先向该手机号发送验证码。")
         if self.app_authenticated and self.cookie:
@@ -342,12 +348,23 @@ class AppLoginSession:
         if time.monotonic() - self.sms_sent_at >= SMS_VALID_SECONDS:
             self.phone = ""
             raise AppLoginError("验证码已超过 10 分钟，请重新获取。", code='SMS_EXPIRED')
-        if self.slider_required:
+        if self.slider_required and not slider_token:
             raise AppLoginError(SLIDER_REQUIRED_MESSAGE, code=SLIDER_REQUIRED_CODE)
+        if slider_token and not self.slider_required:
+            raise AppLoginError('当前登录没有待完成的滑块验证。', code='SLIDER_NOT_REQUIRED')
+        if slider_token and (not isinstance(slider_token, str) or not 1 <= len(slider_token) <= 4096):
+            raise AppLoginError('官方滑块验证结果格式无效，请重新验证。', code='SLIDER_TOKEN_INVALID')
         if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
             raise AppLoginError("请输入 6 位短信验证码。")
-        _, value, _ = self.call(LOGIN_PATH, {"cellNum": encrypt_phone(phone), "verifyCode": code, "imei": "", "sendSmsFlag": "0", "devToken": "", "pageUrl": "LL0001", "channelId": "1"})
-        self.slider_required = str(value.get('retCode')) == SLIDER_REQUIRED_CODE
+        body = {"cellNum": encrypt_phone(phone), "verifyCode": code, "imei": "", "sendSmsFlag": "0",
+                "devToken": "", "pageUrl": "LL0001", "channelId": "1"}
+        if slider_token:
+            body['riskToken'] = slider_token
+        _, value, _ = self.call(LOGIN_PATH, body)
+        code_value = str(value.get('retCode'))
+        self.slider_required = code_value == SLIDER_REQUIRED_CODE and not slider_token
+        if code_value == SLIDER_REQUIRED_CODE and slider_token:
+            raise AppLoginError('官方未接受本次滑块验证，请重新获取验证码后再试。', code=SLIDER_REQUIRED_CODE)
         self.require_success(value, "登录")
         if not self.cookie or "JSESSIONID=" not in self.cookie:
             raise AppLoginError("登录响应缺少 APP 会话，无法连接灵犀。")

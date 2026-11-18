@@ -129,13 +129,35 @@ class AppLoginTests(unittest.TestCase):
         self.assertIn('官方滑块',str(failure.exception))
         self.assertNotIn('private-account-detail',str(failure.exception))
         self.assertEqual(blocked.exception.code,'214100')
-        self.assertTrue(flow.sms_status(reused=True)['slider_required'])
+        status=flow.sms_status(reused=True)
+        self.assertTrue(status['slider_required'])
+        self.assertEqual(status['slider_challenge'],{
+            'app_id':'02aecbb71abe2113e42a602056797e09','device_path':'m1'})
         self.assertFalse(flow.app_authenticated)
         call.assert_called_once();sms.assert_not_called()
+        def accepted(path,body):
+            self.assertEqual(body['riskToken'],'official-human-token')
+            self.assertEqual(body['verifyCode'],'123456')
+            flow.cookie='JSESSIONID=accepted'
+            return 200,{'retCode':'000000'},{}
+        with patch.object(flow,'call',side_effect=accepted) as retry:
+            self.assertEqual(flow.login(flow.phone,'123456',slider_token='official-human-token'),'JSESSIONID=accepted')
+        retry.assert_called_once()
+        self.assertFalse(flow.slider_required)
         flow.sms_sent_at -= 61
         flow.initialized_at = time.monotonic()
         with patch.object(flow,'call',return_value=(200,{'retCode':'000000'},{})):
             self.assertFalse(flow.send_sms('19900000000')['slider_required'])
+
+    def test_slider_token_is_submitted_once_and_a_rejected_token_does_not_loop(self):
+        flow=AppLoginSession(phone='19900000000',sms_sent_at=time.monotonic(),slider_required=True)
+        with patch.object(flow,'call',return_value=(200,{'retCode':'214100'},{})) as call:
+            with self.assertRaises(AppLoginError) as failure:
+                flow.login(flow.phone,'123456',slider_token='official-human-token')
+        self.assertEqual(failure.exception.code,'214100')
+        self.assertIn('未接受',str(failure.exception))
+        self.assertFalse(flow.slider_required)
+        self.assertEqual(call.call_args.args[1]['riskToken'],'official-human-token')
 
     def test_213010_reports_verification_failure_without_resending_sms(self):
         flow = AppLoginSession(phone='19900000000', sms_sent_at=time.monotonic(), sms_request_id='batch')
