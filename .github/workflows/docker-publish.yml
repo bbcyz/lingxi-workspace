@@ -19,24 +19,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build local image for smoke test
+      - name: Build x86_64 image locally
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64
           load: true
           push: false
-          tags: lingxi-smoke-test:latest
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Smoke test container startup & health
+        env:
+          IMAGE_TAG: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
         run: |
           set -e
           cleanup() {
@@ -44,7 +43,7 @@ jobs:
           }
           trap cleanup EXIT
 
-          docker run -d --name lingxi-smoke -p 5500:5500 lingxi-smoke-test:latest
+          docker run -d --name lingxi-smoke -p 5500:5500 "$IMAGE_TAG"
 
           READY=0
           for i in $(seq 1 30); do
@@ -85,12 +84,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Push tested image to Docker Hub
+        env:
+          IMAGE_TAG: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+        run: docker push "$IMAGE_TAG"
