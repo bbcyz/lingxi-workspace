@@ -28,7 +28,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # 2. 拉取原作者仓库最新代码
-          git remote add upstream https://github.com/pppyl/lingxi-workspace.git
+          git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/pppyl/lingxi-workspace.git
           git fetch upstream main
 
           # 3. 智能判断：对比两个分支，看原作者是否有新提交
@@ -41,8 +41,8 @@ jobs:
           fi
 
           echo "检测到原作者有新代码，正在自动合并..."
-          # 4. 自动合并原作者代码（因为我们用了外挂补丁法，此处 100% 顺畅合并）
-          git merge upstream/main -m "chore(sync): 自动同步原作者最新更新" --no-edit
+          # 4. 自动合并原作者代码：原文件若再遇冲突则自动以原作者版本为准，新增补丁文件不受影响
+          git merge upstream/main -X theirs -m "chore(sync): 自动同步原作者最新更新" --no-edit
 
           # 5. 推送到自己的 main 分支
           git push origin main
