@@ -246,8 +246,6 @@ def connect_phone(report, cancel: Event, serial: str = "") -> dict:
                 if len(tokens) != 1:
                     raise PhoneError("APP 没有提供有效的灵犀登录态。请确认已登录，并在手机上正常打开灵犀后重试。")
                 return {"auth_code": tokens[0], "device_model": device["model"]}
-            # The observed homepage has four accessible tabs and a central AI
-            # avatar in the gap between 视频 and 移动爱购. Derive its bounds.
             video, mall = find_text(nodes, "视频"), find_text(nodes, "移动爱购")
             if video is not None and mall is not None and not opened:
                 vb = [int(x) for x in re.findall(r"\d+", video.get("bounds", ""))]

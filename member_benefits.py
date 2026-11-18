@@ -78,7 +78,6 @@ SUIXIN_ENTRY = SUIXIN_PORTAL + '#/rightsbaw?sourceid=056002'
 SUIXIN_ORDER = SUIXIN_PUBLIC + 'orderRightsByEncrypt'
 SUIXIN_VERIFICATION_SMS = SUIXIN_PUBLIC + 'sms/send/sms/by/token'
 SUIXIN_CLAIMS = 'member-suixin-claims'
-ANDROID_ORDER_NOTICE = '安卓版暂未接入该权益的订单验证，请在电脑版工具台处理。'
 PUBLIC_PARAMETERS = {'channelCode', 'channelId', 'memberId', 'activityId', 'pageId',
                      'skuId', 'goodsId', 'productId', 'groupId', 'sellerId'}
 
@@ -535,10 +534,8 @@ class MemberBenefits:
             lookup_claimed_names = True
             for member in members:
                 for benefit in member['benefits']:
-                    if os.environ.get('LINGXI_ANDROID') == '1' and (benefit.get('claim_flow') == 'campus' or benefit['kind'] == '五折购'):
-                        benefit['local_order_notice'] = ANDROID_ORDER_NOTICE
                     if (benefit['kind'] != '礼包' and benefit['can_inspect']
-                            and not benefit['claimed'] and benefit['remaining'] != 0 and 'local_order_notice' not in benefit):
+                            and not benefit['claimed'] and benefit['remaining'] != 0):
                         try:
                             benefit['selection'] = self._benefit_offers(session, benefit, member['id'])
                         except MemberBenefitsError as error:
@@ -1258,8 +1255,6 @@ class MemberBenefits:
         return detail, binding, str(mutex.get('preRemind') or ''), selection.get('_rule_code')
 
     def campus_prepare(self, login_id, sku_id, *, member_id=CAMPUS_MEMBER):
-        if os.environ.get('LINGXI_ANDROID') == '1':
-            raise MemberBenefitsError(ANDROID_ORDER_NOTICE, 'MEMBER_ORDER_UNSUPPORTED', 409)
         period = self._starbucks_period()
         result_key = self._gift_bag_result_key(login_id, member_id)
         with self.claim_lock:
@@ -1293,8 +1288,6 @@ class MemberBenefits:
         return f'{reminder}\n\n{agreement}' if reminder else agreement
 
     def _campus_device(self, session, order, before_submit):
-        if os.environ.get('LINGXI_ANDROID') == '1':
-            raise MemberBenefitsError(ANDROID_ORDER_NOTICE, 'MEMBER_ORDER_UNSUPPORTED', 409)
         try:
             result = self.campus_protocol.prepare(tuple(session.cookies.jar), session.headers['phone'],
                                                   session.headers['User-Agent'], session.headers['Referer'],
@@ -1524,8 +1517,6 @@ class MemberBenefits:
         return benefit, detail, agreement, str(mutex.get('preRemind') or '')
 
     def discount_prepare(self, login_id, member_id, benefit_key, sku_id):
-        if os.environ.get('LINGXI_ANDROID') == '1':
-            raise MemberBenefitsError(ANDROID_ORDER_NOTICE, 'MEMBER_ORDER_UNSUPPORTED', 409)
         period = self._starbucks_period()
         with self._connected(login_id) as session:
             benefit, detail, agreement, reminder = self._discount_product(

@@ -1,8 +1,8 @@
-# Android 独立客户端 v1.9.0
+# Android 独立客户端 v1.9.1
 
-安装 `LingxiWorkspace-1.9.0-Android-arm64.apk` 后打开「本地工具台」。适用 Android 7.0+ ARM64 手机。首次使用在账号管理登录自己的手机号。此版本内置 Python 服务与静态前端，电脑关机也不影响手机上的服务。
+安装 `LingxiWorkspace-1.9.1-Android-arm64.apk` 后打开「本地工具台」。适用 Android 7.0+ ARM64 手机。首次使用在账号管理登录自己的手机号。此版本内置 Python 服务与静态前端，电脑关机也不影响手机上的服务。
 
-应用使用系统 WebView、原生 HTTP/2 网络栈和 Android Keystore。账号、任务及提交记录保存在应用私有目录。卸载会清除本机数据；使用同一签名更新可保留数据。发布文件不包含开发时的数据库或登录信息。
+应用使用系统 WebView 显示本地界面，业务协议由 Python 执行，DFP 与 Wheel 固定资源通过 APK 内嵌 V8 计算。网络请求使用原生 HTTP/2 网络栈，账号、设备状态、任务及提交记录通过 Android Keystore 保护后保存在应用私有目录。卸载会清除本机数据；使用同一签名更新可保留数据。发布文件不包含开发时的数据库或登录信息。
 
 启动时及每 6 小时检查 GitHub 正式版本，发现新版后显示更新提示和安卓 APK 下载入口；「平台管理 → 版本更新」可手动检查及查看更新说明。下载新版后直接覆盖安装，不必卸载。页面刷新和程序重启复用检查缓存，不会反复请求 GitHub；网络失败会显示原因。
 
@@ -12,7 +12,7 @@
 
 ## 构建
 
-需要 JDK 17+、Android SDK 35、Gradle 8.10.2、Python 3.12。项目使用 AGP 8.8.2、Chaquopy 17.2.0。
+需要 JDK 17+、Android SDK 35、Gradle 8.10.2、Python 3.12。项目使用 AGP 8.8.2、Chaquopy 17.2.0 和 Android ARM64 V8 运行库。
 
 设置 `JAVA_HOME`、`ANDROID_HOME`，以及指向 Gradle 可执行文件的 `LINGXI_GRADLE`，然后运行：
 

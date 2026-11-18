@@ -115,6 +115,18 @@ test('manual status queries stay disabled while automatic preparation is armed',
   assert.equal(calls.length,1);
 });
 
+test('device authentication failures show their cause and release the manual claim button',async()=>{
+  const {get,jobs}=await fixture({running:true,serverTime:'2026-10-28T09:00:00+08:00'});
+  assert.equal(get('wed-claim-now').disabled,true);
+  assert.match(get('wed-opening').textContent,/没有空闲的已登录账号/);
+
+  Object.assign(jobs['activity-a'],{state:'failed',enabled:false,failure_code:'DEVICE_AUTH_FAILED',
+    message:'官方设备认证未完成，请稍后主动刷新'});
+  await get('wed-refresh').click();
+  assert.equal(get('wed-claim-now').disabled,false);
+  assert.ok(find(get('wed-status-rows'),'设备认证未完成'));
+});
+
 test('weekly claim button starts the selected accounts only during the open round',async()=>{
   const closed=await fixture();
   assert.equal(closed.get('wed-claim-now').disabled,true);

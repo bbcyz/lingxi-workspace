@@ -1,9 +1,11 @@
 import unittest
 from datetime import datetime
-from unittest.mock import Mock
+from threading import RLock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from recharge.app import create_app
-from recharge.cmcc import (ActivityClient, ActivityError, SHANGHAI, availability,
+from recharge.cmcc import (ActivityClient, ActivityError, DEVICE_SERVER, DEVICE_STATE_SCOPE, SHANGHAI, availability,
                   parse_server_time, validate_entry)
 
 
@@ -76,7 +78,8 @@ class ClaimTests(unittest.TestCase):
 
     def test_device_and_time_gate_are_enforced_on_server(self):
         self.activity.const_id = ''
-        with self.assertRaises(ActivityError):
+        with patch.object(self.activity, '_device_identifier',
+                          side_effect=ActivityError('设备认证失败', 'DEVICE_AUTH_FAILED', 503)), self.assertRaises(ActivityError):
             self.activity.claim()
         self.assertFalse(self.submissions)
         self.activity.const_id = 'official-device-id'
@@ -133,6 +136,45 @@ class ClaimTests(unittest.TestCase):
         self.activity.ensure_browser.assert_not_called()
         self.activity.bridge.rpc.assert_not_called()
         self.assertEqual(self.activity.const_id,'official-device-id')
+
+    def test_python_risk_runtime_persists_account_state_in_encrypted_storage(self):
+        class Storage:
+            def __init__(self):
+                self.data = {}
+                self.lock = RLock()
+
+            def load_activity_data(self, scope):
+                return self.data.get(scope)
+
+            def save_activity_data(self, scope, value):
+                self.data[scope] = value
+
+        storage = Storage()
+        activity = ActivityClient(credential_cache=SimpleNamespace(storage=storage))
+        activity.mode = 'app'
+        activity.app_material = {'phone': '13800138000'}
+        activity.cached_user = self.user
+        activity.http.close()
+        activity.http = Mock()
+        activity.http.request.return_value = SimpleNamespace(status_code=200, headers={}, text='{}')
+
+        def runtime(**kwargs):
+            self.assertEqual(kwargs['platform'], 'Linux armv8l')
+            bridge = kwargs['http_bridge']
+            self.assertEqual(bridge({'url': DEVICE_SERVER + '?', 'method': 'GET'})['status'], 200)
+            with self.assertRaises(ValueError):
+                bridge({'url': DEVICE_SERVER + '?unexpected=value', 'method': 'GET'})
+            storage.save_activity_data(DEVICE_STATE_SCOPE, {'another-account': {'cache': 'concurrent'}})
+            kwargs['state_path'].write_text('{"cache":"fixture"}', encoding='utf-8')
+            return {'result': {'gr-risk-p3': 'd' * 40}, 'state': {'persisted': True}}
+
+        with patch('recharge.cmcc.run_dfp', side_effect=runtime) as pure_runtime:
+            activity.ensure_browser()
+        self.assertEqual(activity.const_id, 'd' * 40)
+        self.assertEqual(pure_runtime.call_count, 1)
+        activity.http.request.assert_called_once_with('GET', DEVICE_SERVER, headers={}, timeout=20, allow_redirects=False)
+        self.assertEqual(storage.data[DEVICE_STATE_SCOPE]['another-account'], {'cache': 'concurrent'})
+        self.assertIn({'cache': 'fixture'}, storage.data[DEVICE_STATE_SCOPE].values())
 
     def test_automatic_timeout_checks_result_before_another_post(self):
         original = self.activity.call.side_effect

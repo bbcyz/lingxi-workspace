@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 from flask import Response, jsonify, request
 
+from app_login import LOGIN_SLIDER_APP_ID
 from http_transport import requests
 
 
@@ -19,6 +20,7 @@ STATIC_EXTENSIONS = {'.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.
 APPLY_PATHS = {CAPTCHA_ROOT+'/api/'+name for name in ('a', 'a2', 'a3', 'p1')}
 VERIFY_PATHS = {CAPTCHA_ROOT+'/api/'+name for name in ('v1', 'v2', 'v3')}
 DEVICE_PATH = 'mgt/decision-engine/udid/c1'
+DEVICE_PATHS = {DEVICE_PATH, 'mgt/decision-engine/udid/m1'}
 WALLET_RESOURCES = {
     'wallet/index-private-web_a54cc0c.js': 'https://touch.10086.cn/i/mobile/component/index-private-web_a54cc0c.js',
     'wallet/udid/c1': 'https://touch.10086.cn/i/mobile/tfk/mgt/decision-engine/udid/c1',
@@ -27,7 +29,8 @@ WALLET_RESOURCES = {
 
 def register_coupon_captcha(app, *, session_factory=None):
     factory = session_factory or requests.Session
-    app_ids = app.extensions.setdefault('coupon_captcha_app_ids', {APP_ID})
+    app_ids = app.extensions.setdefault('coupon_captcha_app_ids', set())
+    app_ids.update({APP_ID, LOGIN_SLIDER_APP_ID})
 
     @app.route('/coupon-verification/<path:resource>', methods=['GET', 'POST'])
     def coupon_verification_proxy(resource):
@@ -47,7 +50,7 @@ def register_coupon_captcha(app, *, session_factory=None):
             methods = {'GET'}
         elif resource in VERIFY_PATHS:
             methods = {'POST'}
-        elif resource == DEVICE_PATH:
+        elif resource in DEVICE_PATHS:
             methods = {'GET', 'POST'}
         else:
             return jsonify(error='不支持的验证资源。'), 404
@@ -60,7 +63,7 @@ def register_coupon_captcha(app, *, session_factory=None):
         for key in ('Referer', 'Content-Type', 'Accept'):
             if key in request.headers:
                 headers[key] = request.headers[key]
-        if resource in (DEVICE_PATH, 'wallet/udid/c1'):
+        if resource in DEVICE_PATHS or resource == 'wallet/udid/c1':
             for key in ('appId', 'param'):
                 if key in request.headers:
                     headers[key] = request.headers[key]

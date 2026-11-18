@@ -27,7 +27,6 @@ public final class WorkspaceService extends Service {
             starting = true; error = "";
             wake = ((PowerManager) getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Lingxi:tasks");
             wake.acquire();
-            ActivityRiskBridge.initialize(this);
             new Thread(() -> {
                 try {
                     if (!Python.isStarted()) Python.start(new AndroidPlatform(this));
