@@ -167,3 +167,19 @@ test('the toolbar sign-in follows the selected account',async()=>{
   await get('wed-checkin-sign').click();
   assert.deepEqual(calls.filter(call=>call.body?.submit).map(call=>call.body),[{login_id:'a',submit:true}]);
 });
+
+test('only today’s check-in failure shows the daily retry limit',async()=>{
+  const failure={state:'failed',attempts:5,message:'官方活动登录响应格式无效'};
+  const checkin={settings:{enabled:true,time:'00:01'},records:{
+    a:{...failure,attempt_date:'2026-10-26',attempted_at:'2026-10-26T00:23:00+08:00'},
+    b:{...failure,attempt_date:'2026-10-25'},
+  },active:[]};
+  const {get}=await fixture({checkin});
+  const [today,previous]=get('wed-checkin-rows').children;
+  assert.ok(find(today,failure.message));
+  assert.ok(find(today,'今日失败已达5次，明日再检查'));
+  assert.match(today.children[4].children[1].textContent,/^失败时间.*00:23:00$/);
+  assert.ok(find(previous,'今日尚未查询'));
+  assert.equal(find(previous,failure.message),null);
+  assert.equal(find(previous,'今日失败已达5次，明日再检查'),null);
+});

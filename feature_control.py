@@ -10,6 +10,7 @@ from login_storage import LoginStorageError
 BUILTINS = (
     ('lingxi', '灵犀对话', '/lingxi', ('/lingxi', '/api/lingxi', '/api/chat', '/api/conversation', '/api/login/select')),
     ('star-day', '星动日', '/star-day', ('/star-day', '/api/star-day')),
+    ('net-age', '网龄', '/net-age', ('/net-age', '/api/net-age')),
     ('recharge', '周三充值日', '/recharge/', ('/recharge',)),
     ('checkin', '签到有礼', '/checkin', ('/checkin', '/api/checkin')),
     ('monthly-coupon', '每月话费券', '/monthly-coupon', ('/monthly-coupon', '/api/monthly-coupon')),
