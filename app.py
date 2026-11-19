@@ -519,7 +519,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
 
     @app.get('/api/star-day/products')
     def star_day_products():
-        return jsonify(products=star_scheduler.products())
+        return jsonify(products=star_scheduler.products(request.args.get('login_id')))
 
     @app.post('/api/star-day/jobs')
     def star_day_schedule():

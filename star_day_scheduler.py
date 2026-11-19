@@ -168,9 +168,12 @@ class StarDayScheduler:
         self._queue(login_id,'inspect')
         return result
 
-    def products(self):
-        account = next((a for a in self.activity_accounts() if a['status'] == 'active'), None)
+    def products(self, login_id=None):
+        account = next((a for a in self.activity_accounts()
+                        if a['status'] == 'active' and (login_id is None or a['id'] == login_id)), None)
         if account is None:
+            if login_id is not None:
+                raise StarDayError('请选择已登录的星动日账号，再读取官方权益列表。', 'APP_LOGIN_REQUIRED', 401)
             raise StarDayError('请先登录一个有效账号，再读取官方权益列表。', 'APP_LOGIN_REQUIRED', 401)
         products = self.client_factory(lambda: self.credentials(account['id'])).products()
         with self.lock:
