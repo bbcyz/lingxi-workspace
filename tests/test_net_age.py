@@ -1,10 +1,13 @@
-from datetime import datetime
+from contextlib import nullcontext
+from datetime import datetime, timedelta
 import json
 import re
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from activities.coc_client import CocError
+from credential_cache import CredentialCache
+from http_transport import requests
 from net_age import AI_IDS, BIRTH_IDS, MEMBER_ID, PAGE_ID, NetAge, NetAgeClient, _config
 from recharge.cmcc import SHANGHAI
 
@@ -133,6 +136,144 @@ class NetAgeTests(unittest.TestCase):
         with patch('net_age.requests', transport):
             self.assertEqual(_config(), {'configContent_27': '931'})
         session.get.assert_called_once()
+
+    def test_badge_counts_only_two_confirmed_available_groups_and_excludes_pending(self):
+        years = re.match(r'(\d+)年', '13年')
+        client = Mock(surprise_chances=Mock(return_value=4))
+        rows = self.client.benefits(5, years, True, [], [])
+        self.assertTrue(rows['flow']['available'] and rows['ai']['available'])
+        client.inspect.return_value = {'rows': rows}
+        self.assertEqual(self.service.status('a', client)['available_count'], 2)
+        self.assertEqual(self.service.available_counts({'a','b'}), {'a':2})
+
+        self.service.mark('a','birthday',{'choice':'phone','period':'2026'})
+        self.assertEqual(self.service.available_counts({'a'}), {'a':1})
+        self.now = self.now.replace(month=12, day=1)
+        self.assertEqual(self.service.available_counts({'a'}), {})
+
+    def test_badge_scan_checks_other_accounts_once_per_day_without_surprise_or_claims(self):
+        years = re.match(r'(\d+)年', '13年')
+        client = Mock()
+        rows = self.client.benefits(5, years, False, [], [])
+        client.inspect.return_value = {'rows': {group:rows[group] for group in ('member','birthday')}}
+        self.service.connected = Mock(side_effect=lambda _:nullcontext(client))
+
+        self.assertEqual(self.service.check_availability('a'), 1)
+        self.assertEqual(self.service.check_availability('a'), 1)
+        client.inspect.assert_called_once_with(self.now, badges_only=True)
+        self.now += timedelta(days=1)
+        self.assertEqual(self.service.check_availability('a'), 1)
+        self.assertEqual(client.inspect.call_count, 2)
+        client.surprise_chances.assert_not_called()
+        client.post.assert_not_called()
+
+    def test_confirmed_member_claim_immediately_decreases_the_cached_badge(self):
+        years = re.match(r'(\d+)年', '13年')
+        rows = self.client.benefits(5, years, True, [], [])
+        self.service._record_availability('a', self.now, rows)
+        offer = next(offer for offer in rows['member']['offers'] if offer['id']=='iqiyi')
+        client = Mock(user={'provinceCode':'100'})
+        client.post.side_effect = lambda *_, before_submit, **__: before_submit()
+        client.orders.return_value = [{'activity_id':MEMBER_ID, 'skuCode':offer['products'][0],
+                                      'createTime':'2026-11-18 17:00:00'}]
+        self.assertTrue(self.service._submit(client,'a','member',offer,'2026-11',code='123456')['confirmed'])
+        self.assertEqual(self.service.available_counts({'a'}), {'a':1})
+
+    def test_no_monthly_order_permits_only_explicit_manual_repreparation(self):
+        client = Mock(user={'provinceCode':'100'})
+        client.inspect.side_effect = lambda *_args, **_kwargs: {'rows':self.client.benefits(5, None, False, [], [])}
+        self.service.mark('a','flow',{'choice':'monthly','period':'2026-11'})
+        self.service.mark('a','member',{'choice':'bilibili','period':'2026-11'})
+        rows = self.service.status('a', client)['rows']
+        for group in ('flow','member'):
+            self.assertEqual(rows[group]['status'], '结果待确认')
+            self.assertTrue(rows[group]['retry_available'])
+            self.assertIn('本月暂未查到领取记录', rows[group]['description'])
+
+        with patch('net_age.NetAgeClient', return_value=client):
+            with self.assertRaises(CocError) as blocked:
+                self.service.begin('a','member','bilibili')
+            self.assertEqual(blocked.exception.code, 'SUBMISSION_PENDING')
+            prepared = self.service.begin('a','member','bilibili',retry=True)
+        self.assertTrue(prepared['needs_slider'])
+        self.assertTrue(self.service.pending['a'].retry)
+        client.post.assert_called_once_with('activities/growth/verify/status', {}, recover=True)
+        self.assertIn('member', self.service.submissions['a'])
+
+    def test_existing_monthly_order_blocks_retry_even_with_an_unknown_sku(self):
+        receipt = {'activity_id':MEMBER_ID, 'skuCode':'unknown-provider-sku', 'createTime':'2026-11-18 23:00:00'}
+        client = Mock()
+        client.inspect.side_effect = lambda *_args, **_kwargs: {'rows':self.client.benefits(5, None, False, [receipt], [])}
+        self.service.mark('a','member',{'choice':'bilibili','period':'2026-11'})
+        row = self.service.status('a', client)['rows']['member']
+        self.assertFalse(row['retry_available'])
+        self.assertIn('发现本月订单', row['description'])
+        with self.assertRaises(CocError) as blocked:
+            self.service._offer(client,'a','member','bilibili',self.now,retry=True)
+        self.assertEqual(blocked.exception.code, 'SUBMISSION_PENDING')
+        client.post.assert_not_called()
+
+    def test_confirmed_member_order_resolves_a_different_pending_choice(self):
+        receipt = {'activity_id':MEMBER_ID, 'skuCode':'200000034571', 'createTime':'2026-11-18 23:00:00'}
+        client = Mock()
+        client.inspect.return_value = {'rows':self.client.benefits(5, None, False, [receipt], [])}
+        self.service.mark('a','member',{'choice':'bilibili','period':'2026-11'})
+        row = self.service.status('a', client)['rows']['member']
+        self.assertEqual(row['status'], '已领取')
+        self.assertEqual([offer['id'] for offer in row['offers'] if offer['received']], ['qq-music'])
+        self.assertNotIn('member', self.service.submissions['a'])
+
+    def test_pre_submit_failure_does_not_clear_an_earlier_pending_attempt(self):
+        previous = {'choice':'monthly','period':'2026-11'}
+        self.service.mark('a','flow',previous)
+        client = Mock(user={'provinceCode':'100'})
+        client.post.side_effect = CocError('官方设备认证暂未通过','GDT_REJECTED')
+        offer = self.client.benefits(5, None, False, [], [])['flow']['offers'][0]
+
+        with self.assertRaises(CocError):
+            self.service._submit(client,'a','flow',offer,'2026-11',code='123456')
+
+        self.assertEqual(self.service.submissions['a']['flow'],previous)
+        client.orders.assert_not_called()
+
+    def test_surprise_checks_actual_quota_and_prizes_reusing_the_scoped_session(self):
+        snapshot = {'id':'a','phone':'13800000000'}
+        self.service.credentials = lambda _:snapshot
+        self.service.cache = CredentialCache()
+        activity = Mock(user={'maskedMobile':'138****0000','token':'coc-token'})
+        activity.post.side_effect = [{}, {'cmPassPortToken':'scoped-ticket'}]
+        self.service.connected = Mock(side_effect=lambda _:nullcontext(activity))
+
+        def response(code, data):
+            value = Mock(status_code=200)
+            value.json.return_value = {'code':code, 'data':data}
+            return value
+
+        def session(replies):
+            client = MagicMock()
+            client.__enter__.return_value = client
+            client.headers = {}
+            client.cookies = requests.Cookies()
+            client.post.side_effect = replies
+            return client
+
+        count = response('200', 0)
+        prizes = response('200', {'total':2,'list':[
+            {'salesUnitId':10,'showName':'测试券','createTime':'2026-11-18'},
+            {'salesUnitId':-1,'showName':'未中奖'},
+        ]})
+        first = session([response('0',{'mobileMask':'138****0000','token':'market-token'}),count,prizes])
+        second = session([count,prizes])
+        expected = {'remaining':0, 'prizes':[{'name':'测试券','date':'2026-11-18'}]}
+        with patch('net_age.requests.Session', side_effect=[first,second]):
+            self.assertEqual(self.service.surprise_details('a'), expected)
+            self.assertEqual(self.service.surprise_details('a'), expected)
+
+        self.service.connected.assert_called_once_with('a')
+        self.assertEqual(activity.post.call_count, 2)
+        self.assertEqual(second.headers['phone'],'market-token')
+        self.assertEqual([call.args[0].rsplit('/',1)[1] for call in second.post.call_args_list],
+                         ['residueLotteryCount','lotteryList'])
 
     def test_generic_claim_failure_reconciles_the_official_record(self):
         offer = self.client.benefits(5, None, False, [], [])['flow']['offers'][0]
