@@ -50,4 +50,4 @@ jobs:
 
           # 6. 核心闭环：主动触发 Docker 镜像自动打包构建
           echo "正在触发 Docker 镜像自动打包..."
-          gh workflow run docker-publish.yml --ref main
+          gh workflow run docker-publish.yml --repo "${{ github.repository }}" --ref main
