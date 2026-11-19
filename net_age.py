@@ -13,7 +13,7 @@ from flask import jsonify, render_template, request
 from activities.coc_client import ORIGIN, CocClient, CocError
 from feature_runtime import feature_running
 from http_transport import requests
-from recharge.cmcc import SHANGHAI
+from recharge.cmcc import SHANGHAI, mask_phone
 
 
 PAGE_ID = '1879720710683729920'
@@ -30,7 +30,14 @@ BIRTH_COUPONS = (
     ('cinema', '电影票抵扣券', '200000043066', 30, {'1111': 1, '2222': 2, '3333': 1, '4444': 2}),
 )
 SURPRISE_ID = '16096'
+SURPRISE_ENTRY = ORIGIN + '/coc3/canvas/rightsmarket-h5-canvas/online/wljxmh?channelCode=P00000122499'
+SURPRISE_SCOPE = 'rights-market:net-age-surprise'
+SURPRISE_LOTTERY = '/coc3/coc3-market-activity/cmpp-manage/lottery/'
 ORDER_IDS = [*FLOW_IDS, MEMBER_ID, *AI_IDS, *BIRTH_IDS]
+BADGE_GROUPS = ('member', 'birthday')
+BADGE_ORDER_IDS = [MEMBER_ID, *BIRTH_IDS]
+AVAILABILITY_SCOPE = 'net-age-availability'
+RETRY_GROUPS = ('flow', 'member')
 
 # Product-code aliases also appear in order history when an offer is replaced.
 AI_OFFERS = (
@@ -101,6 +108,7 @@ class Verification:
     challenge: str = ''
     access_token: str = ''
     sms_sent_at: float = 0
+    retry: bool = False
 
 
 class NetAgeClient(CocClient):
@@ -121,14 +129,14 @@ class NetAgeClient(CocClient):
             pass
         raise CocError('官方未返回有效的惊喜礼次数', 'SURPRISE_FORMAT')
 
-    def inspect(self, now, *, recover=True):
+    def inspect(self, now, *, recover=True, badges_only=False):
         profile = self.post('activities/common/queryUserInfo', {}, recover=recover)
         growth = self.post('activities/growth/query', {'touchCode': CHANNEL, 'provinceCode': self.user.get('provinceCode', '')},
                            recover=recover)
         level = growth.get('level') if isinstance(growth, dict) else None
         if not isinstance(profile, dict) or not isinstance(level, str):
             raise CocError('官方未返回完整的网龄资格', 'PROFILE_FORMAT')
-        orders = self.orders(ORDER_IDS, recover=recover)
+        orders = self.orders(BADGE_ORDER_IDS if badges_only else ORDER_IDS, recover=recover)
         month = now.strftime('%Y-%m')
         year = now.strftime('%Y-')
         current = [row for row in orders if str(row.get('createTime', '')).startswith(month)]
@@ -137,6 +145,8 @@ class NetAgeClient(CocClient):
         years = re.match(r'(\d+)年', str(profile.get('userChinaMobileage', '')))
         birth_date = str(profile.get('userBegin', ''))
         rows = self.benefits(rank, years, profile.get('isBirthMonth'), current, annual)
+        if badges_only:
+            rows = {group: rows[group] for group in BADGE_GROUPS}
         return {'level': level, 'age': str(profile.get('userChinaMobileage', '')),
                 'birthday': f'{birth_date[4:6]}月{birth_date[6:8]}日' if re.fullmatch(r'\d{8}', birth_date) else '',
                 'rows': rows}
@@ -177,9 +187,10 @@ class NetAgeClient(CocClient):
         return {
             'flow': self.row(f'{flow_tier + 1}GB 流量月包券', rank > 0, flow_claimed, current, [
                 dict(id='monthly', name=f'{flow_tier + 1}GB 流量月包券', activity=FLOW_IDS[flow_tier],
-                     prizes=(), products=FLOW_CODES, sms_product=FLOW_CODES[flow_tier], mode='sms', history_ids=FLOW_IDS)]),
+                     prizes=(), products=FLOW_CODES, sms_product=FLOW_CODES[flow_tier], mode='sms', history_ids=FLOW_IDS)],
+                has_period_orders=any(row['activity_id'] in FLOW_IDS for row in current)),
             'member': self.row('每月任选 1 款', rank == 5, member_claimed, current, member_offers,
-                               unavailable='成长等级 V5 可领'),
+                               unavailable='成长等级 V5 可领', has_period_orders=any(row['activity_id'] == MEMBER_ID for row in current)),
             'ai': self.row(f'本月已选 {ai_used}/{ai_limit} 款', rank > 0, bool(ai_limit and ai_used >= ai_limit),
                            current, ai_offers),
             'birthday': self.row('生日月任选一款', birthday_ready, birthday_claimed, annual, birthday_offers,
@@ -187,11 +198,11 @@ class NetAgeClient(CocClient):
         }
 
     @staticmethod
-    def row(description, eligible, claimed, orders, offers, *, unavailable='当前账号暂无资格'):
+    def row(description, eligible, claimed, orders, offers, *, unavailable='当前账号暂无资格', has_period_orders=False):
         confirmed = [offer for offer in offers if _received(orders, offer)]
         return {'description': description, 'status': '已领取' if claimed else '可领取' if eligible else unavailable,
                 'offers': [{**offer, 'received': offer in confirmed} for offer in offers] if eligible or claimed else [],
-                'available': eligible and not claimed}
+                'available': eligible and not claimed, 'has_period_orders': has_period_orders}
 
 
 class NetAge:
@@ -202,6 +213,7 @@ class NetAge:
         self.account_locks = {}
         self.pending = {}
         self.submissions = (storage.load_activity_data('net-age-submissions') or {}) if storage else {}
+        self.availability = (storage.load_activity_data(AVAILABILITY_SCOPE) or {}) if storage else {}
 
     @contextmanager
     def connected(self, login_id):
@@ -240,41 +252,178 @@ class NetAge:
         if pending is not None:
             pending.client.close()
 
-    def status(self, login_id, client):
+    @staticmethod
+    def _surprise_request(session, path, payload):
+        try:
+            response = session.post(ORIGIN + path, json=payload, timeout=(5, 12), allow_redirects=False)
+        except requests.RequestsError as error:
+            raise CocError('连接官方网龄惊喜礼失败，请稍后核对', 'SURPRISE_NETWORK') from error
+        if response.status_code == 401:
+            raise CocError('惊喜礼会话已失效', 'SURPRISE_SESSION_EXPIRED', 401)
+        if response.status_code == 429:
+            raise CocError('官方暂时限制查询频率，请稍后再试', 'SURPRISE_RATE_LIMITED', 429)
+        if response.status_code != 200:
+            raise CocError(f'官方惊喜礼接口 HTTP {response.status_code}', 'SURPRISE_HTTP')
+        try:
+            result = response.json()
+        except ValueError as error:
+            raise CocError('官方惊喜礼响应格式异常', 'SURPRISE_FORMAT') from error
+        if not isinstance(result, dict):
+            raise CocError('官方惊喜礼响应格式异常', 'SURPRISE_FORMAT')
+        return result
+
+    def _authorize_surprise(self, login_id, snapshot, session):
+        phone = mask_phone(snapshot['phone'])
+        with self.connected(login_id) as activity:
+            if activity.user.get('maskedMobile') != phone:
+                raise CocError('网龄会话账号与所选号码不一致', 'SURPRISE_ACCOUNT_MISMATCH', 409)
+            token = activity.user.get('token')
+            if not token:
+                raise CocError('官方网龄会话未提供惊喜礼授权', 'SURPRISE_AUTH_REQUIRED', 401)
+            activity.post('user/authenticationLogin', {'token': token}, mutation=True)
+            result = activity.post('user/getCmPassPortTokenByUid', {'token': token, 'targetSourceId': '056002'}, mutation=True)
+        ticket = result.get('cmPassPortToken') if isinstance(result, dict) else None
+        if not ticket:
+            raise CocError('官方未发放惊喜礼授权凭据', 'SURPRISE_AUTH_REQUIRED', 401)
+        result = self._surprise_request(session, '/coc3/gr/login/ssoRights/userLoginV2', {
+            'ticket': ticket, 'ticketType': 8, 'businessType': 'RIGHTS_MARKET', 'wxoaType': '',
+            'm1': '', 'm2': '', 's1': '', 's2': '', 'from': '',
+        })
+        if str(result.get('code')) != '0':
+            raise CocError('官方惊喜礼授权未通过，请在中国移动 APP 核对登录', 'SURPRISE_AUTH_REQUIRED', 401)
+        user = result.get('data')
+        if not isinstance(user, dict) or user.get('mobileMask') != phone or not user.get('token'):
+            raise CocError('官方惊喜礼账号绑定未通过', 'SURPRISE_ACCOUNT_MISMATCH', 409)
+        session.headers['phone'] = user['token']
+        return {}
+
+    def _read_surprise(self, session, path, payload):
+        def read():
+            response = self._surprise_request(session, SURPRISE_LOTTERY + path, payload)
+            data = response.get('data')
+            code = data.get('resultCode') if isinstance(data, dict) else None
+            if str(code) == '-516' or str(response.get('code')) == '-516':
+                raise CocError('惊喜礼会话已失效', 'SURPRISE_SESSION_EXPIRED', 401)
+            if str(response.get('code')) != '200' or code not in (None, 0, '0'):
+                raise CocError('官方尚未返回惊喜礼查询结果', 'SURPRISE_FAILED')
+            return data
+
+        try:
+            return read()
+        except CocError as error:
+            if error.code != 'SURPRISE_SESSION_EXPIRED' or not self.cache.recover(session):
+                raise
+        return read()
+
+    def surprise_details(self, login_id):
+        snapshot = self.credentials(login_id)
+        if snapshot is None:
+            raise CocError('请先恢复该共享账号登录', 'APP_LOGIN_REQUIRED', 401)
+        with requests.Session() as session:
+            session.headers.update({'Origin': ORIGIN, 'Referer': SURPRISE_ENTRY, 'Accept': 'application/json'})
+            self.cache.connect(SURPRISE_SCOPE, snapshot, session,
+                               lambda: self._authorize_surprise(login_id, snapshot, session), headers=('phone',))
+            remaining = self._read_surprise(session, 'residueLotteryCount', {'activityId': int(SURPRISE_ID)})
+            if type(remaining) is not int or remaining < 0:
+                raise CocError('官方抽奖次数格式异常', 'SURPRISE_FORMAT')
+            awards = self._read_surprise(session, 'lotteryList', {'activityIds': [int(SURPRISE_ID)],
+                                                                 'pageIndex': 1, 'pageSize': 10, 'lotteryFlag': False})
+            self.cache.sync(session)
+        if not isinstance(awards, dict) or not (isinstance(awards.get('list'), list)
+                                                or awards.get('list') is None and str(awards.get('total')) == '0'):
+            raise CocError('官方奖品记录格式异常', 'SURPRISE_FORMAT')
+        prizes = [{'name': str(item.get('showName') or item.get('salesUnitName'))[:120],
+                   'date': str(item.get('createTime') or '')[:30]}
+                  for item in awards.get('list') or [] if isinstance(item, dict) and str(item.get('salesUnitId')) != '-1'
+                  and (item.get('showName') or item.get('salesUnitName'))]
+        return {'remaining': remaining, 'prizes': prizes}
+
+    def _save_availability(self, login_id, record):
+        if record == self.availability.get(login_id):
+            return
+        updated = {**self.availability, login_id: record}
+        if self.storage:
+            self.storage.save_activity_data(AVAILABILITY_SCOPE, updated)
+        self.availability = updated
+
+    def available_counts(self, login_ids):
         now = self.now()
-        value = client.inspect(now)
+        month = now.strftime('%Y-%m')
         with self.lock:
-            for group, row in value['rows'].items():
+            return {
+                login_id: sum(
+                    self.submissions.get(login_id, {}).get(group, {}).get('period') != self.period(group, now)
+                    for group in record['groups']
+                )
+                for login_id, record in self.availability.items()
+                if login_id in login_ids and record.get('month') == month and 'groups' in record
+            }
+
+    def check_availability(self, login_id):
+        now = self.now()
+        day = now.date().isoformat()
+        with self.lock:
+            record = self.availability.get(login_id, {})
+            if record.get('attempt_day') == day or self.busy_login(login_id):
+                return self.available_counts({login_id}).get(login_id)
+            self._save_availability(login_id, {**record, 'attempt_day': day})
+        with self.connected(login_id) as client:
+            rows = client.inspect(now, badges_only=True)['rows']
+            return self._record_availability(login_id, now, rows)
+
+    def _record_availability(self, login_id, now, rows):
+        with self.lock:
+            available = [group for group in BADGE_GROUPS if rows[group]['available']]
+            for group, row in rows.items():
                 record = self.submissions.get(login_id, {}).get(group)
                 if record and record['period'] == self.period(group, now):
-                    # The two birthday gifts consume the same annual entitlement.
-                    if any(offer['received'] and (group == 'birthday' or offer['id'] == record['choice'])
+                    if any(offer['received'] and (group in ('flow', 'member', 'birthday') or offer['id'] == record['choice'])
                            for offer in row['offers']):
                         self.mark(login_id, group, None)
+                    elif group in RETRY_GROUPS:
+                        has_orders = row['has_period_orders']
+                        row.update(status='结果待确认', description='已核对官方订单，发现本月订单，领取项目待确认' if has_orders
+                                   else '已核对官方订单，本月暂未查到领取记录',
+                                   retry_available=row['available'] and not has_orders, recheck=True, available=False)
                     elif group == 'birthday':
                         row.update(status='结果待确认', description='已查询官方订单，暂未查到领取记录', available=False)
                     else:
                         row.update(status='结果待核对', available=False)
-                row['offers'] = [{key: offer[key] for key in ('id', 'name', 'received', 'mode')} for offer in row['offers']]
+            previous = self.availability.get(login_id, {})
+            stamp = now.isoformat()
+            if stamp >= previous.get('checked_at', ''):
+                self._save_availability(login_id, {'month': now.strftime('%Y-%m'), 'checked_at': stamp,
+                    'attempt_day': max(now.date().isoformat(), previous.get('attempt_day', '')), 'groups': available})
+            return self.available_counts({login_id}).get(login_id, 0)
+
+    def status(self, login_id, client):
+        now = self.now()
+        value = client.inspect(now)
+        value['available_count'] = self._record_availability(login_id, now, value['rows'])
+        for row in value['rows'].values():
+            row['offers'] = [{key: offer[key] for key in ('id', 'name', 'received', 'mode')} for offer in row['offers']]
         try:
             remaining = client.surprise_chances()
-            surprise = {'status': f'专区剩余 {remaining} 次', 'description': '官方抽奖需端内授权，提交待接通'}
+            surprise = {'status': f'专区剩余 {remaining} 次', 'section_remaining': remaining,
+                        'description': '实际次数以官方抽奖页为准，官方活动限 APP 内抽奖'}
         except CocError as error:
             surprise = {'status': '次数待查询', 'description': str(error)}
         value['rows']['surprise'] = surprise
         return value
 
-    def _offer(self, client, login_id, group, choice, now, *, recover=True):
+    def _offer(self, client, login_id, group, choice, now, *, recover=True, retry=False):
         row = client.inspect(now, recover=recover)['rows'][group]
         offer = next((item for item in row['offers'] if item['id'] == choice and not item['received']), None)
         if not row['available'] or offer is None:
             raise CocError('当前选项不可领取，请刷新官方状态', 'NOT_AVAILABLE', 409)
-        if self.submissions.get(login_id, {}).get(group, {}).get('period') == self.period(group, now):
+        pending = self.submissions.get(login_id, {}).get(group, {})
+        if (pending.get('period') == self.period(group, now)
+                and not (retry and group in RETRY_GROUPS and not row['has_period_orders'])):
             raise CocError('该权益有一笔结果待核对，请先刷新', 'SUBMISSION_PENDING', 409)
         client.post('activities/growth/verify/status', {}, recover=recover)
         return offer
 
-    def begin(self, login_id, group, choice):
+    def begin(self, login_id, group, choice, *, retry=False):
         with self.account_lock(login_id):
             if self.busy_login(login_id):
                 raise CocError('该账号有一笔正在验证的领取，请先完成或取消', 'ACCOUNT_BUSY', 409)
@@ -283,7 +432,7 @@ class NetAge:
             try:
                 client.connect()
                 now = self.now()
-                offer = self._offer(client, login_id, group, choice, now)
+                offer = self._offer(client, login_id, group, choice, now, retry=retry)
                 if offer['mode'] == 'direct':
                     return self._submit(client, login_id, group, offer, self.period(group, now))
                 needs_slider = group == 'member' or offer['activity'] == BIRTH_IDS[1]
@@ -291,7 +440,7 @@ class NetAge:
                     provinces = str(_config().get('configContent_27', '')).split(',')
                     needs_slider = client.user.get('provinceCode') in {province.strip() for province in provinces}
                 operation = Verification(secrets.token_urlsafe(18), client, group, offer, self.period(group, now),
-                                         time.monotonic()+600, needs_slider)
+                                         time.monotonic()+600, needs_slider, retry=retry)
                 self.pending[login_id] = operation
                 return {'operation': operation.id, 'needs_slider': needs_slider, 'offer': offer['name'],
                         'notice': '请确认当前手机号已绑定 QQ 音乐账号。领取会使用本月唯一名额。' if offer['id'] == 'qq-music' else ''}
@@ -349,7 +498,8 @@ class NetAge:
             if operation.period != self.period(operation.group, now):
                 self.close_verification(login_id)
                 raise CocError('权益领取周期已变更，请重新查询', 'PERIOD_CHANGED', 409)
-            offer = self._offer(client, login_id, operation.group, operation.offer['id'], now, recover=False)
+            offer = self._offer(client, login_id, operation.group, operation.offer['id'], now,
+                                recover=False, retry=operation.retry)
             if offer != operation.offer:
                 self.close_verification(login_id)
                 raise CocError('官方权益已更新，请重新选择', 'OFFER_CHANGED', 409)
@@ -373,28 +523,41 @@ class NetAge:
         path = 'activities/prize/templatePrize' + ('/new' if wheel else '')
         payload = {'lotteryId' if wheel else 'activityId': offer['activity'], 'provinceCode': client.user.get('provinceCode', ''),
                    'jsonExtParam': json.dumps(extra, separators=(',', ':'))}
+        previous = self.submissions.get(login_id, {}).get(group)
         record = {'choice': offer['id'], 'period': period}
+        submitted = False
 
         def before_submit():
+            nonlocal submitted
             if not feature_running():
                 raise CocError('网龄已关闭，领取流程已停止', 'FEATURE_DISABLED', 423)
+            record['submitted_at'] = self.now().isoformat()
             self.mark(login_id, group, record)
+            submitted = True
 
         try:
             client.post(path, payload, encryption='wheel' if wheel else 'aurora',
                         mutation=True, before_submit=before_submit)
         except CocError as error:
+            if not submitted:
+                raise
             ambiguous = error.code == '10' and str(error).startswith('领取失败')
             if not error.uncertain and error.code != 'UPSTREAM_FORMAT' and not ambiguous:
-                self.mark(login_id, group, None)
+                self.mark(login_id, group, previous)
                 raise
+            self.mark(login_id, group, {**record, 'response_code': error.code})
         try:
             orders = client.orders([offer['activity']], recover=False)
         except CocError:
             return {'message': '领取结果待核对，请稍后刷新', 'confirmed': False}
         confirmed = [item for item in orders if str(item.get('createTime', '')).startswith(period)]
         if _received(confirmed, offer):
-            self.mark(login_id, group, None)
+            with self.lock:
+                available = self.availability.get(login_id, {})
+                if group in available.get('groups', ()):
+                    self._save_availability(login_id, {**available, 'checked_at': self.now().isoformat(),
+                        'groups': [remaining for remaining in available['groups'] if remaining != group]})
+                self.mark(login_id, group, None)
             message = '官方记录已确认领取'
             if offer['id'] == 'qq-music':
                 try:
@@ -421,7 +584,19 @@ def register_net_age(app, credentials, accounts, cache, storage, recover):
 
     @app.get('/api/net-age/accounts')
     def net_age_accounts():
-        return jsonify(accounts=service.accounts())
+        rows = service.accounts()
+        return jsonify(accounts=rows, available_counts=service.available_counts({account['id'] for account in rows
+                       if account['status'] == 'active'}))
+
+    @app.get('/api/net-age/availability')
+    def net_age_availability():
+        login_id = request.args.get('id')
+        if not any(account['id'] == login_id and account['status'] == 'active' for account in service.accounts()):
+            return jsonify(error='请选择已登录的共享账号。'), 401
+        try:
+            return jsonify(count=service.check_availability(login_id))
+        except CocError as error:
+            return jsonify(error=str(error), code=error.code), error.status
 
     @app.get('/api/net-age/status')
     def net_age_status():
@@ -434,14 +609,27 @@ def register_net_age(app, credentials, accounts, cache, storage, recover):
         except CocError as error:
             return jsonify(error=str(error), code=error.code), error.status
 
+    @app.get('/api/net-age/surprise')
+    def net_age_surprise():
+        login_id = request.args.get('id')
+        if not login_id:
+            return jsonify(error='请选择共享账号。'), 400
+        try:
+            return jsonify(service.surprise_details(login_id))
+        except CocError as error:
+            return jsonify(error=str(error), code=error.code), error.status
+
     @app.post('/api/net-age/claim')
     def net_age_claim():
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict) or payload.get('group') not in ('flow', 'member', 'ai', 'birthday') or not all(
                 isinstance(payload.get(key), str) and payload[key] for key in ('id', 'choice')):
             return jsonify(error='请选择账号和权益。'), 400
+        retry = payload.get('retry', False)
+        if type(retry) is not bool or retry and payload['group'] not in RETRY_GROUPS:
+            return jsonify(error='请选择可重新准备的权益。'), 400
         try:
-            return jsonify(service.begin(payload['id'], payload['group'], payload['choice']))
+            return jsonify(service.begin(payload['id'], payload['group'], payload['choice'], retry=retry))
         except CocError as error:
             return jsonify(error=str(error), code=error.code), error.status
 

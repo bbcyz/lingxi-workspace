@@ -268,7 +268,7 @@ class ActivityClient:
                 'userCheckId': format(int(phone), 'x'),
                 'carrierOperator': str(profile.get('carrierOperator') or '002'),
                 'appVersionCode': '12.5.6', 'took': 0,
-            }, headers={'Referer': page.url, 'Content-Type': 'application/json;charset=UTF-8'},
+            }, headers={'Referer': str(page.url), 'Content-Type': 'application/json;charset=UTF-8'},
                 timeout=(10, 25), allow_redirects=False)
             if result.status_code != 200:
                 raise ActivityError(f'APP 活动认证 HTTP {result.status_code}', 'APP_SSO_HTTP', 502, retryable=True)

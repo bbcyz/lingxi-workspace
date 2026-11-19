@@ -19,6 +19,15 @@ NAME='lingxi-workspace'
 
 
 def main():
+    android_only = '--android-only' in sys.argv[1:]
+    paths = [ROOT/'release'/f'LingxiWorkspace-{VERSION}-Android-arm64.apk']
+    if not android_only:
+        paths = [ROOT/'release'/f'LingxiWorkspace-{VERSION}-Windows-x64.exe',
+                 ROOT/'release'/f'LingxiWorkspace-{VERSION}-Windows-x64.zip',
+                 *paths, ROOT/'release/SHA256SUMS.txt']
+    for path in paths:
+        if not path.is_file():
+            raise FileNotFoundError(path)
     result=subprocess.run(['git','credential','fill'],input='protocol=https\nhost=github.com\n\n',capture_output=True,text=True,
         env={**os.environ,'GIT_TERMINAL_PROMPT':'0','GCM_INTERACTIVE':'never'},check=True,timeout=30)
     credential=dict(line.split('=',1) for line in result.stdout.splitlines() if '=' in line)
@@ -45,9 +54,10 @@ def main():
     except HTTPError as error:
         if error.code!=404:raise
         release=api(f'/repos/{OWNER}/{NAME}/releases',{'tag_name':'v'+VERSION,'target_commitish':'main',
-            'name':'v'+VERSION+' · 本地工具台 Android 与 Windows','body':notes,'draft':True,'prerelease':False})
+            'name':'v'+VERSION+(' · Android 修复版' if android_only else ' · 本地工具台 Android 与 Windows'),
+            'body':notes,'draft':True,'prerelease':False})
     assets={asset['name']:asset for asset in api(f'/repos/{OWNER}/{NAME}/releases/{release["id"]}/assets')}
-    for path in [ROOT/'release'/f'LingxiWorkspace-{VERSION}-Windows-x64.exe',ROOT/'release'/f'LingxiWorkspace-{VERSION}-Windows-x64.zip',ROOT/'release'/f'LingxiWorkspace-{VERSION}-Android-arm64.apk',ROOT/'release/SHA256SUMS.txt']:
+    for path in paths:
         with path.open('rb') as stream:digest='sha256:'+hashlib.file_digest(stream,'sha256').hexdigest()
         if path.name in assets:
             asset=assets[path.name]
@@ -73,9 +83,13 @@ def main():
         if response.status!=201:raise RuntimeError('Release asset upload HTTP '+str(response.status))
         if asset.get('digest') and asset['digest']!=digest:raise RuntimeError('Uploaded asset checksum mismatch')
         print('Uploaded '+path.name,flush=True)
-    release=api(f'/repos/{OWNER}/{NAME}/releases/{release["id"]}',{'draft':False,'make_latest':'true'},method='PATCH')
+    release=api(f'/repos/{OWNER}/{NAME}/releases/{release["id"]}',
+                {'draft':False,'make_latest':'false' if android_only else 'true'},method='PATCH')
     check=api(f'/repos/{OWNER}/{NAME}/releases/tags/v{VERSION}')
-    if check['draft'] or len(check['assets'])<4:raise RuntimeError('Published release verification failed')
+    expected = {path.name for path in paths}
+    uploaded = {asset['name'] for asset in check['assets'] if asset['state'] == 'uploaded'}
+    if check['draft'] or not expected <= uploaded or android_only and uploaded != expected:
+        raise RuntimeError('Published release verification failed')
     print(json.dumps({'repository':repo['html_url'],'release':check['html_url'],
         'assets':[{'name':asset['name'],'bytes':asset['size'],'digest':asset.get('digest')} for asset in check['assets']]},ensure_ascii=False),flush=True)
 

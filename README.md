@@ -48,7 +48,7 @@ Python + Flask 本地网页，默认地址 http://127.0.0.1:5500/ 。
 
 ## Android 独立版下载
 
-在 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/latest) 下载 `LingxiWorkspace-1.9.2-Android-arm64.apk`，适用于 Android 7.0+ ARM64 手机。服务、账号和任务在手机本机运行，不需要连接电脑；更新时使用同一签名覆盖安装，保留本机数据。后台任务受系统电池策略影响，详细说明与构建方式见 [ANDROID.md](ANDROID.md)。
+在 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/tag/v1.9.3) 下载 `LingxiWorkspace-1.9.3-Android-arm64.apk`，适用于 Android 7.0+ ARM64 手机。服务、账号和任务在手机本机运行，不需要连接电脑；更新时使用同一签名覆盖安装，保留本机数据。后台任务受系统电池策略影响，详细说明与构建方式见 [ANDROID.md](ANDROID.md)。
 
 ## 页面与使用
 
@@ -257,7 +257,7 @@ node --test tests/test_lingxi_task_model.mjs
 
 ## Android 独立版
 
-下载发布页中的 `LingxiWorkspace-1.9.2-Android-arm64.apk`，适用 Android 7.0 及以上的 64 位 ARM 手机。安装后直接打开，无需电脑、Python 或 USB。界面通过系统 WebView 展示，Python 服务、SQLite、账号登录和定时任务均在手机内运行；应用仅监听手机回环地址，并由每次启动的随机会话限制访问。
+下载发布页中的 `LingxiWorkspace-1.9.3-Android-arm64.apk`，适用 Android 7.0 及以上的 64 位 ARM 手机。安装后直接打开，无需电脑、Python 或 USB。界面通过系统 WebView 展示，Python 服务、SQLite、账号登录和定时任务均在手机内运行；应用仅监听手机回环地址，并由每次启动的随机会话限制访问。
 
 登录凭据使用 Android Keystore 加密，Windows 仍使用 DPAPI。两端各自保存数据，不会把发布者账号打包，也不自动复制电脑的登录态。同一手机号遵循运营商的单点登录规则。付款始终由用户在官方 APP 手动完成。
 
