@@ -6,6 +6,8 @@ import shutil
 def stage_activities(root, destination):
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
+    for name in ('net_age_profile.json', 'net_age_member_profile.json', 'net_age_surprise_profile.json'):
+        shutil.copy2(Path(root)/'activities'/name, destination/name)
     for source in (Path(root)/'activities').iterdir():
         if source.is_file() and source.suffix == '.py':
             shutil.copy2(source, destination/source.name)

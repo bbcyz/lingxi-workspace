@@ -22,6 +22,7 @@ from monthly_coupon_client import MonthlyCouponClient, MonthlyCouponError
 from coupon_client import CouponClient, CouponError, _cbc_encrypt
 from recharge.cmcc import ActivityClient
 from activities.seven_day.client import SevenDayClient, SevenDayError
+from net_age import NetAgeClient
 from tests import test_checkin_client as checkin
 from tests import test_coupon_client as wallet
 from tests import test_monthly_coupon_auth as monthly
@@ -76,6 +77,70 @@ class CredentialCacheTests(unittest.TestCase):
         self.connect(snapshot={**SNAPSHOT,'id':'account-b','phone':'13900000001'})
         self.connect(snapshot={**SNAPSHOT,'phone':'13900000002'})
         self.assertEqual(self.logins,4)
+
+    def test_net_age_and_seven_day_parallel_entry_share_one_coc_login(self):
+        gate=threading.Barrier(6)
+        logins=Mock()
+        def run(index):
+            client=(NetAgeClient(lambda:SNAPSHOT,self.cache,None,app_auth=True) if index%2 else
+                SevenDayClient(lambda:SNAPSHOT,credential_cache=self.cache))
+            client.session_factory=http_client
+            def initialize():
+                logins()
+                threading.Event().wait(.03)
+                client.user={'userId':'account-a','token':'shared-coc-token'}
+                client.client.cookies.set('User-Token','shared-coc-token',domain='dev.coc.10086.cn',path='/')
+                return {'user':client.user}
+            client._authenticate=initialize
+            gate.wait(timeout=5)
+            client.connect()
+            return client
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            clients=list(pool.map(run,range(6)))
+        try:
+            logins.assert_called_once()
+            self.assertEqual({client.client._credential_binding[0] for client in clients},{'seven-day'})
+            self.assertEqual({client.user['token'] for client in clients},{'shared-coc-token'})
+            self.assertEqual(len({client.client._credential_binding[-1] for client in clients}),1)
+            clients[0].client.cookies.set('RiskToken','operation-a',domain='dev.coc.10086.cn',path='/')
+            self.assertTrue(all(client.client.cookies.get('RiskToken') is None for client in clients[1:]))
+        finally:
+            for client in clients:client.close()
+
+    def test_legacy_net_age_identity_is_reused_by_both_coc_activities(self):
+        legacy=http_client()
+        legacy.cookies.set('User-Token','legacy-coc-token',domain='dev.coc.10086.cn',path='/')
+        self.cache.connect('net-age',SNAPSHOT,legacy,lambda:{'user':{'userId':'account-a','token':'legacy-coc-token'}},
+            expiry_cookies=('User-Token',))
+        clients=[NetAgeClient(lambda:SNAPSHOT,self.cache,None,app_auth=True),
+            SevenDayClient(lambda:SNAPSHOT,credential_cache=self.cache)]
+        try:
+            for client in clients:
+                client.session_factory=http_client
+                client._authenticate=Mock(side_effect=AssertionError('valid compatible login must be reused'))
+                client.connect()
+                self.assertEqual(client.user['token'],'legacy-coc-token')
+                self.assertEqual(client.client.cookies.get('User-Token'),'legacy-coc-token')
+        finally:
+            for client in clients:client.close()
+
+    def test_page_state_persists_per_account_without_shortening_auth_expiry(self):
+        client=http_client()
+        client.cookies.jar.set_cookie(Cookie(0,'User-Token','auth',None,False,'official.test',True,False,
+            '/',True,True,2000,False,None,None,{}))
+        self.cache.connect('page',SNAPSHOT,client,lambda:{'user':'account-a'},expiry_cookies=('User-Token',))
+        client.cookies.jar.set_cookie(Cookie(0,'gdp_session','visitor',None,False,'official.test',True,False,
+            '/',True,False,1100,False,None,None,{}))
+        data={'user':'account-a','wheel_page':{'local_storage':{'visitor':'private-visitor'}}}
+        self.cache.sync(client,data=data)
+        self.clock[0]=1200
+        restarted=CredentialCache(self.storage,now=lambda:self.clock[0])
+        saved=restarted.load('page',SNAPSHOT)
+        self.assertEqual(saved['data'],data)
+        self.assertEqual(saved['expires_at'],2000)
+        self.assertIsNone(restarted.load('page',{**SNAPSHOT,'id':'account-b'}))
+        for file in Path(self.directory.name).glob('accounts.sqlite3*'):
+            self.assertNotIn(b'private-visitor',file.read_bytes())
 
     def test_cookie_scope_and_security_attributes_survive_restore(self):
         client = http_client()

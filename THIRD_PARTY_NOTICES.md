@@ -17,3 +17,4 @@ The Android build uses Chaquopy (MIT), Javet (Apache-2.0), OkHttp and Okio (Apac
 - Javet: https://github.com/caoccao/Javet/blob/main/LICENSE
 - OkHttp: https://github.com/square/okhttp/blob/master/LICENSE.txt
 - HTTPX: https://github.com/encode/httpx/blob/master/LICENSE.md
+- OpenCV (Apache-2.0): https://github.com/opencv/opencv/blob/4.12.0/LICENSE. Android uses the packaged native image primitives from Python; Windows includes opencv-python and NumPy with their distribution licenses.

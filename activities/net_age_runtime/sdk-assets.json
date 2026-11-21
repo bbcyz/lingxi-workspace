@@ -1,0 +1,55 @@
+{
+  "origin": "https://dev.coc.10086.cn/coc/web6/ageFeedbackV2/?pageId=1879720710683729920&channelId=P00000001090&iteration=true",
+  "assets": [
+    {
+      "file": "wheel.mjs",
+      "url": "https://res.coc.10086.cn/res/cdn/coc1-online/fixedPath/coc1/ageFeeRevision/wheel.js",
+      "sha256": "59d08954cb97f10f3905e59e4ae2204393a055e9cd548888fe72b5afa824bc8f"
+    },
+    {
+      "file": "wheel_bg.wasm",
+      "url": "https://res.coc.10086.cn/res/cdn/coc1-online/fixedPath/coc1/ageFeeRevision/wheel_bg.wasm",
+      "sha256": "541c0fd95270c5db94228f1a84e5dca6d3508053f8eb3224d56432f70389ca91"
+    },
+    {
+      "file": "page.html",
+      "sha256": "382396ef861ffefdcacb7b77f125cf97db6c4786a1bf58f1f291d7881642711a"
+    },
+    {
+      "file": "gdp-full-H5-3.8.3.js",
+      "url": "https://res.coc.10086.cn/res/cdn/coc1-online/fixedPath/coc1/gdp-full-H5-3.8.3.js",
+      "sha256": "1bac3eb79a6ada15a9a63023ece2289ebceb98cc5cc2b03cc16d0df87dfc10a0"
+    },
+    {
+      "file":"chunk-vendors.a9882ff4.js",
+      "sha256":"b6caf32eeff2e1ea7b2529fa261bca5d665fc287d51de0c5a6f6e588455f9b3f"
+    },
+    {
+      "file":"app.d7ae5a09.js",
+      "sha256":"171b4c8362d299aa964f670b05a50f53c64db5ecd0f990032fb8d9d8dfd7131c"
+    },
+    {
+      "file":"chunk-4bb6761c.ba410b8c.js",
+      "sha256":"2bbdbc97cc268f0cbb27e25d5b99c53dff337f61bdfc0ad3358c75065dec376b"
+    },
+    {
+      "file":"chunk-0ef63f4e.0128ad4f.js",
+      "sha256":"6b614535555d0a43a6c9f6514c35d662c52252dac30ee1ab8597e1c1cee259b0"
+    },
+    {
+      "file":"chunk-a3acce52.e54386e0.js",
+      "sha256":"ea3fc3be8d498da5e0d09c5b4cc4ee3c44e4703c46a8bb469bcc777c581c29dc"
+    }
+  ],
+  "runtime": "Node.js 24 with jsdom 29, VM modules and @napi-rs/canvas",
+  "lifecycle": "prepare, load official analytics initialization, refresh while preserving cookies/storage, await user verification, original gDT and roto in the retained second page",
+  "frontend":"The original AfterLogin chooseClick/getPrizeDraw and b775.d request builder execute in Node. Axios is intercepted before business HTTP sending; Python owns the actual submission.",
+  "transport": "Python activity session, gDT only; no browser process",
+  "last_verified": "2026-11-20",
+  "limits": [
+    "The Node DOM host is an emulation, not a captured or equivalent Android WebView.",
+    "WebGL is unavailable in the Node canvas host and is reported as unavailable.",
+    "Analytics initializes local state; analytics telemetry is not transmitted.",
+    "No successful monthly claim has been confirmed with this runtime."
+  ]
+}

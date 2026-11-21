@@ -7,14 +7,17 @@
   const accountStates = {active:'已登录', login_required:'需重新登录', restoring:'正在恢复', retry:'等待重连'};
   let sharedAccounts = [], currentAccount, needsRelogin = false;
   let availableCounts = {};
-  let model, sevenDay, selected, operation, queryVersion = 0, accountVersion = 0, submitting = false, drawTimer;
+  let model, sevenDay, surprise, surpriseError = '', selected, operation, queryVersion = 0, accountVersion = 0, submitting = false, drawTimer, surpriseTimer;
   const surpriseChecks = new Set();
 
   async function api(path, values) {
-    const response = await fetch(path, values && {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(values)});
+    const response = await fetch(path, values
+      ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(values)}
+      : {cache:'no-store'});
     if (response.status === 404 && path === '/api/seven-day/status') return null;
     const data = await response.json();
-    if (!response.ok) throw Object.assign(new Error(data.error || '本地服务请求失败'), {code:data.code});
+    if (!response.ok) throw Object.assign(new Error(data.error || '本地服务请求失败'),
+      {code:data.code, trace_id:data.trace_id, operation_active:data.operation_active});
     return data;
   }
 
@@ -102,48 +105,74 @@
 
   async function checkSurprise() {
     const {id} = currentAccount, version = queryVersion;
-    if (surpriseChecks.has(id)) return;
+    if (submitting || surpriseChecks.has(id) || surprise?.accounts.find(account => account.id === id)?.running) return;
     surpriseChecks.add(id);
-    message('age-feedback', '正在核对官方抽奖次数和奖品记录…');
+    surpriseError = '';
     render();
     try {
-      const data = await api('/api/net-age/surprise?id=' + encodeURIComponent(id));
+      await api('/api/net-age/surprise/auto', {id});
       if (version !== queryVersion) return;
-      const row = model.rows.surprise;
-      const prizes = data.prizes.slice(0, 3).map(prize => prize.name).join('、');
-      row.status = `抽奖页剩余 ${data.remaining} 次`;
-      row.description = [Number.isInteger(row.section_remaining) ? `专区显示 ${row.section_remaining} 次` : '',
-        prizes ? `最近奖品：${prizes}` : '官方暂无奖品记录', '官方活动限 APP 内抽奖'].filter(Boolean).join(' · ');
-      message('age-feedback', '');
+      await pollSurprise(id, version);
     } catch (error) {
-      if (version === queryVersion) message('age-feedback', error.message);
+      if (version === queryVersion) surpriseError = error.message;
     } finally {
       surpriseChecks.delete(id);
       render();
     }
   }
 
-  function confirm(group, offers, retry = false) {
-    selected = {id:currentAccount.id, group};
-    if (retry) selected.retry = true;
+  async function pollSurprise(id, version = queryVersion) {
+    if (version !== queryVersion || currentAccount?.id !== id) return;
+    clearTimeout(surpriseTimer);
+    try {
+      const data = await api('/api/net-age/surprise/auto');
+      if (version !== queryVersion || currentAccount?.id !== id) return;
+      surprise = data;
+      surpriseError = '';
+      if (data.accounts.find(account => account.id === id)?.running) {
+        surpriseTimer = setTimeout(() => pollSurprise(id, version), 1500);
+      }
+    } catch (error) {
+      if (version === queryVersion) surpriseError = error.message;
+    }
+    render();
+  }
+
+  function showChoices(group, retry) {
     operation = null;
     $('age-confirm-title').textContent = group === 'seven' ? '确认参加今日抽奖' : rows.get(group).querySelector('h3').textContent;
-    $('age-confirm-account').textContent = accountLabel(currentAccount);
-    const choices = $('age-options'); choices.replaceChildren();
-    choices.hidden = false;
+    $('age-options').hidden = group === 'seven' || !!selected.choice;
     $('age-verification').hidden = true;
+    $('age-slider-section').hidden = group !== 'member';
     $('age-code').value = ''; $('age-code').required = false;
     $('age-send-sms').textContent = '获取验证码';
-    $('age-slider-panel').hidden = true;
-    $('age-challenge').disabled = false; $('age-slider-submit').disabled = false;
-    offers.forEach((offer, index) => {
+    $('age-submit').textContent = group === 'seven' ? '确认抽奖' : retry ? '确认重新领取' : '确认领取';
+  }
+
+  function confirm(group, offers, retry = false) {
+    if (submitting) return;
+    selected = {id:currentAccount.id, group};
+    if (retry) selected.retry = true;
+    if (offers.length === 1) selected.choice = offers[0].id;
+    showChoices(group, retry);
+    $('age-confirm-account').textContent = accountLabel(currentAccount);
+    const choices = $('age-options'); choices.replaceChildren();
+    if (offers.length > 1) offers.forEach((offer, index) => {
       const label = document.createElement('label'), input = document.createElement('input');
       input.type = 'radio'; input.name = 'age-choice'; input.value = offer.id; input.required = true; input.checked = index === 0;
       label.append(input, offer.name); choices.append(label);
     });
-    $('age-submit').textContent = group === 'seven' ? '确认抽奖' : retry ? '确认重新准备' : '确认领取';
-    message('age-confirm-note', retry ? '已查询官方本月订单。请确认上次未领取，再重新准备验证。' : '');
+    const memberRetry = group === 'member' && retry;
+    let note = '';
+    if (memberRetry) note = '本月暂未查到官方领取订单。请确认本月尚未领取，再继续领取。';
+    else if (retry && group === 'birthday') note = '请确认今年尚未领取生日礼，再继续领取。';
+    else if (retry) note = '重新领取前会核对本月的官方流量券订单。';
+    message('age-confirm-note', note);
     dialog.showModal();
+    if (offers.length === 1) {
+      $('age-confirm-title').textContent = offers[0].name;
+      return submitClaim();
+    }
   }
 
   function render() {
@@ -153,12 +182,29 @@
     relogin.hidden = !currentAccount || (currentAccount.status !== 'login_required' && !needsRelogin);
     relogin.dataset.accountRelogin = currentAccount?.id || '';
     const unavailable = !currentAccount ? '待选账号' : needsRelogin ? '需重新登录'
-      : currentAccount.status !== 'active' ? accountStates[currentAccount.status] || '暂不可用' : '';
+      : currentAccount.status !== 'active' && !model ? accountStates[currentAccount.status] || '暂不可用' : '';
     for (const [group, row] of rows) {
       const status = row.querySelector('[data-age-status]');
       const detail = row.querySelector('[data-age-detail]');
       const area = row.querySelector('[data-age-actions]');
       area.replaceChildren();
+      if (group === 'surprise' && currentAccount) {
+        const account = surprise?.accounts.find(item => item.id === currentAccount.id);
+        const checking = surpriseChecks.has(currentAccount.id) || account?.running;
+        const draws = (account?.draws || []).filter(item => item.confirmed);
+        const wins = draws.filter(item => item.won);
+        const prizes = (account?.prizes || []).slice(0, 3).map(item => `${item.name}（${item.date}）`).join('、');
+        status.textContent = surprise?.enabled === false ? '自动任务已停用' : surprise?.active === false ? '活动已结束'
+          : checking ? '正在核对并抽取' : account?.uncertain ? '结果待核对' : account?.state === 'failed' ? '自动抽奖暂停'
+          : Number.isInteger(account?.remaining) ? `剩余 ${account.remaining} 次` : '待自动检查';
+        detail.textContent = ['后台每日检查全部有效账号，有次数就抽', surpriseError || surprise?.warning || account?.message,
+          draws.length ? `今日已核对 ${draws.length} 次抽奖${wins.length ? '，抽中 '+wins.map(item => item.name).join('、') : '，未中奖'}` : '',
+          wins.some(item => item.needs_address) ? '实物奖品请在 48 小时内填写收货信息' : '',
+          prizes ? '历史奖品：'+prizes : ''].filter(Boolean).join(' · ');
+        action(area, checking ? '正在处理…' : '立即检查', checkSurprise,
+          checking || submitting || !surprise || !surprise.enabled || !surprise.active);
+        continue;
+      }
       if (unavailable) {
         status.textContent = unavailable;
         detail.textContent = '';
@@ -183,30 +229,34 @@
       const offers = value?.offers || [];
       const received = offers.filter(offer => offer.received).map(offer => offer.name);
       const choices = offers.filter(offer => !offer.received);
+      const last = value?.last_received;
       status.textContent = value?.status || '待查询';
-      detail.textContent = [value?.description, received.length ? '已领 '+received.join('、') : ''].filter(Boolean).join(' · ');
-      if (group === 'surprise' && value) {
-        const checking = surpriseChecks.has(currentAccount.id);
-        action(area, checking ? '正在核对…' : '核对抽奖和奖品', checkSurprise, checking);
-      }
+      detail.textContent = [value?.description, received.length ? '已领 '+received.join('、') : '',
+        last ? `最近领取 ${last.name}（${last.date}）` : ''].filter(Boolean).join(' · ');
       if (value?.recheck) action(area, '核对结果', loadStatus, submitting);
-      if (value?.retry_available && choices.length) action(area, '重新准备', () => confirm(group, choices, true), submitting);
-      if (value?.available && choices.length) action(area, '选择领取', () => confirm(group, choices));
+      if (value?.retry_available && choices.length) {
+        const label = choices.length === 1 || group === 'flow' ? '重新领取' : group === 'member' ? '选择领取' : '重新准备';
+        action(area, label, () => confirm(group, choices, true), submitting);
+      }
+      if (value?.available && choices.length) action(area, choices.length === 1 ? '领取' : '选择领取',
+        () => confirm(group, choices), submitting);
     }
   }
 
   async function loadStatus() {
     const account = currentAccount, version = ++queryVersion;
-    model = null; sevenDay = undefined; needsRelogin = false;
+    model = null; sevenDay = undefined; surprise = undefined; surpriseError = ''; needsRelogin = false;
     clearTimeout(drawTimer);
+    clearTimeout(surpriseTimer);
     render();
-    if (account?.status !== 'active') {
+    if (!account) {
       message('age-feedback', '');
       return;
     }
     const {id} = account;
+    if (rows.has('surprise')) void pollSurprise(id, version);
     message('age-feedback', '正在查询官方权益…');
-    const campaignQuery = api('/api/seven-day/status').then(campaign => {
+    void api('/api/seven-day/status').then(campaign => {
       if (version === queryVersion) {
         sevenDay = campaign;
         render();
@@ -216,17 +266,20 @@
           else if (account?.status === 'active') sevenRun('refresh', id, false);
         }
       }
-    });
-    const [age] = await Promise.allSettled([api('/api/net-age/status?id='+encodeURIComponent(id)), campaignQuery]);
-    if (version !== queryVersion) return;
-    model = age.status === 'fulfilled' ? age.value : null;
-    if (model) {
+    }).catch(() => {});
+    try {
+      const age = await api('/api/net-age/status?id='+encodeURIComponent(id));
+      if (version !== queryVersion) return;
+      model = age;
       availableCounts[id] = model.available_count || 0;
       renderAccountCounts();
       window.dispatchEvent(new Event('net-age-counts-changed'));
+      message('age-feedback', '');
+    } catch (error) {
+      if (version !== queryVersion) return;
+      needsRelogin = ['APP_LOGIN_REQUIRED','ACTIVITY_LOGIN_REQUIRED'].includes(error.code);
+      message('age-feedback', error.message);
     }
-    needsRelogin = age.status === 'rejected' && ['APP_LOGIN_REQUIRED','ACTIVITY_LOGIN_REQUIRED'].includes(age.reason.code);
-    message('age-feedback', age.status === 'rejected' ? age.reason.message : '');
     render();
   }
 
@@ -280,7 +333,7 @@
   function setBusy(busy) {
     submitting = busy;
     $('age-submit').disabled = busy || !!(operation && !operation.sms);
-    $('age-send-sms').disabled = busy || !!(operation?.needs_slider && !operation.slider);
+    $('age-send-sms').disabled = busy;
   }
 
   function verificationNote(text) {
@@ -297,6 +350,10 @@
   }
 
   async function sendSms() {
+    if (operation.needs_slider) {
+      verificationNote('正在自动完成图形验证…');
+      await verify('auto-slider');
+    }
     verificationNote('正在发送验证码…');
     const data = await verify('sms');
     operation.sms = true;
@@ -308,45 +365,21 @@
   function showVerification(data) {
     operation = data;
     $('age-options').hidden = true;
-    $('age-options').replaceChildren();
     $('age-confirm-title').textContent = data.offer;
     $('age-verification').hidden = false;
     $('age-slider-section').hidden = !data.needs_slider;
+    $('age-sms-section').hidden = false;
     $('age-code').required = true;
     $('age-submit').textContent = '确认领取';
     verificationNote();
   }
 
-  $('age-challenge').addEventListener('click', () => verificationStep(async () => {
-    const data = await verify('challenge');
-    const ground = $('age-slider-ground'), piece = $('age-slider-piece');
-    $('age-slider-position').value = '0'; $('age-slider-piece').style.left = '0';
-    ground.onload = () => { piece.style.top = (data.ordinate / ground.naturalHeight * 100)+'%'; };
-    piece.onload = () => {
-      piece.style.width = (piece.naturalWidth / 360 * 100)+'%';
-      $('age-slider-position').max = 360 - piece.naturalWidth;
-    };
-    ground.src = 'data:image/png;base64,'+data.ground;
-    piece.src = 'data:image/png;base64,'+data.patch;
-    $('age-slider-panel').hidden = false;
-    $('age-slider-submit').disabled = false;
-    operation.slider = false;
-  }));
-  $('age-slider-position').addEventListener('input', event => {
-    $('age-slider-piece').style.left = (Number(event.target.value) / 360 * 100)+'%';
-  });
-  $('age-slider-submit').addEventListener('click', () => verificationStep(async () => {
-    $('age-slider-submit').disabled = true;
-    await verify('slider', {position:Number($('age-slider-position').value)});
-    operation.slider = true;
-    $('age-slider-panel').hidden = true;
-    $('age-challenge').disabled = true;
+  $('age-send-sms').addEventListener('click', () => verificationStep(async () => {
+    operation.sms=false;
+    $('age-code').value='';
     await sendSms();
   }));
-  $('age-send-sms').addEventListener('click', () => verificationStep(sendSms));
-
-  $('age-confirm-form').addEventListener('submit', async event => {
-    event.preventDefault();
+  async function submitClaim() {
     if (submitting) return;
     const group = selected.group;
     setBusy(true);
@@ -354,27 +387,54 @@
       if (group === 'seven') {
         dialog.close(); await sevenRun('draw', selected.id);
       } else {
+        if (operation) verificationNote(operation.needs_slider ? '正在自动验证并提交领取…' : '正在提交领取…');
         const data = operation ? await verify('submit', {code:$('age-code').value})
-          : await api('/api/net-age/claim', {...selected, choice:new FormData(event.currentTarget).get('age-choice')});
+          : await api('/api/net-age/claim', {...selected,
+              choice:selected.choice || new FormData($('age-confirm-form')).get('age-choice')});
         if (data.operation) {
           showVerification(data);
-          if (!data.needs_slider) await sendSms();
+          await sendSms();
+          return;
+        }
+        if (group === 'flow' && data.code === '10') {
+          selected.retry = true;
+          showChoices(group, true);
+          verificationNote(data.message);
+          const flow = model?.rows.flow;
+          if (flow && selected.id === currentAccount?.id) {
+            Object.assign(flow, {status:data.message, description:'', available:false, retry_available:true, recheck:true});
+          }
           return;
         }
         operation = null;
         dialog.close();
         if (selected.id === currentAccount?.id) {
-          await loadStatus();
+          const birthday = model?.rows.birthday;
+          if (group === 'birthday' && data.code === '10' && birthday) {
+            Object.assign(birthday, {status:'上次领取失败', description:data.message || '官方返回领取失败（10）',
+              available:false, retry_available:true, recheck:true});
+          } else {
+            await loadStatus();
+          }
           if (selected.id === currentAccount?.id) message('age-feedback', data.message);
         }
       }
-    } catch (error) { verificationNote(error.message); }
+    } catch (error) {
+      if (operation && (error.operation_active === false || group === 'birthday' && error.code === 'GDT_REJECTED')) {
+        showChoices(group, selected.retry);
+      }
+      verificationNote([error.message, error.trace_id && '追踪号 '+error.trace_id].filter(Boolean).join(' · '));
+    }
     finally {
       if (group === 'member' || group === 'birthday') {
         window.dispatchEvent(new Event('net-age-counts-changed'));
       }
       setBusy(false); render();
     }
+  }
+  $('age-confirm-form').addEventListener('submit', event => {
+    event.preventDefault();
+    return submitClaim();
   });
   $('age-cancel').addEventListener('click', () => { if (!submitting) dialog.close(); });
   dialog.addEventListener('cancel', event => { if (submitting) event.preventDefault(); });

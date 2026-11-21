@@ -32,7 +32,7 @@ def main():
         shutil.rmtree(notice_dir)
     notice_dir.mkdir()
     shutil.copy2(Path(sys.base_prefix)/'LICENSE.txt',notice_dir/'Python-LICENSE.txt')
-    dependencies=['Flask','Werkzeug','Jinja2','MarkupSafe','itsdangerous','click','blinker','curl_cffi','cffi','certifi','cryptography','requests','urllib3','charset-normalizer','idna','waitress','pystray','Pillow','mini-racer','six','PyInstaller','qrcode']
+    dependencies=['Flask','Werkzeug','Jinja2','MarkupSafe','itsdangerous','click','blinker','curl_cffi','cffi','certifi','cryptography','requests','urllib3','charset-normalizer','idna','waitress','pystray','Pillow','mini-racer','six','PyInstaller','qrcode','opencv-python','numpy']
     for name in dependencies:
         dist=importlib.metadata.distribution(name)
         for entry in dist.files or []:
@@ -44,7 +44,7 @@ def main():
         '--distpath',str(ROOT/'.build/dist'),'--workpath',str(ROOT/'.build/pyinstaller'),'--specpath',str(ROOT/'.build'),
         '--icon',str(assets/'app.ico'),'--noupx','--collect-all','curl_cffi','--collect-all','cryptography','--collect-all','py_mini_racer',
         '--collect-data','certifi','--hidden-import','pystray._win32',
-        '--exclude-module','tkinter','--exclude-module','matplotlib','--exclude-module','numpy','--exclude-module','pytest',
+        '--exclude-module','tkinter','--exclude-module','matplotlib','--exclude-module','pytest',
         '--exclude-module','orjson']
     activity_resources = ROOT/'.build/activity-resources'
     if activity_resources.exists():
@@ -72,7 +72,10 @@ def main():
     forbidden={'.local','.git','analysis','data','window-profile','browser-profile'}
     files=[path for path in package.rglob('*') if path.is_file()]
     for path in files:
-        if forbidden.intersection(path.relative_to(package).parts) or path.suffix in {'.sqlite3','.log','.db'}:
+        private_parts=forbidden.intersection(path.relative_to(package).parts)
+        if path.is_relative_to(package/'_internal/cv2/data'):
+            private_parts.discard('data')  # OpenCV's public classifier resources.
+        if private_parts or path.suffix in {'.sqlite3','.log','.db'}:
             raise RuntimeError('Private runtime data in package: '+str(path.relative_to(package)))
         if path.name.lower() in {'chrome.exe','msedge.exe'}:raise RuntimeError('Browser must not be bundled in this release')
     with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as output:

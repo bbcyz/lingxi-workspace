@@ -12,6 +12,8 @@ class ActivityPackagingTests(unittest.TestCase):
             activities = root/'activities'
             activities.mkdir()
             (activities/'__init__.py').write_text('', 'utf-8')
+            profiles=('net_age_profile.json','net_age_member_profile.json','net_age_surprise_profile.json')
+            for name in profiles:(activities/name).write_text('{}','utf-8')
             for name in ('registered','checkin_common','unfinished'):
                 module = activities/name
                 module.mkdir()
@@ -25,6 +27,7 @@ class ActivityPackagingTests(unittest.TestCase):
             self.assertTrue((root/'staged/checkin_common/client.py').is_file())
             self.assertFalse((root/'staged/unfinished').exists())
             self.assertFalse((root/'staged/registered/tests').exists())
+            for name in profiles:self.assertEqual((root/'staged'/name).read_text('utf-8'),'{}')
 
 
 if __name__ == '__main__':
