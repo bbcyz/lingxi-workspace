@@ -775,7 +775,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                     saved = unified.remember(phone, cookie, profile, token, name.strip(),
                                              app_context=context if isinstance(context,dict) else None)
                     app.extensions['session_maintenance'].due.pop(saved.id, None)
-                    for hook in ('seven_day_login_restored', 'daily_gold_login_restored'):
+                    for hook in ('seven_day_login_restored', 'daily_gold_login_restored','net_age_surprise_login_restored'):
                         if restored := app.extensions.get(hook):
                             restored(saved.id)
                     if not manage:
@@ -1226,12 +1226,12 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
 
     star_scheduler = StarDayScheduler(star_credentials, unified.public, storage=database)
     app.extensions['star_day_scheduler'] = star_scheduler
-    def activity_credentials(login_id):
+    def activity_credentials(login_id, *, allow_cached=False):
         with unified.lock:
             saved = unified.get_id(login_id)
-            if saved is None or saved.status != 'active':
+            if saved is None or not allow_cached and saved.status != 'active':
                 return None
-            return {**unified.credentials(login_id),'id':login_id}
+            return {**unified.credentials(login_id),'id':login_id,'primary_status':saved.status}
 
     def recover_activity_identity(snapshot):
         saved = unified.get(snapshot['phone'])
@@ -1256,7 +1256,8 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
     register_services(app, unified.public, unified.credentials, recover=recover_activity_identity,
                       accept_credentials=accept_bill_credentials)
     register_member_benefits(app, unified.credentials, credential_cache, recover=recover_activity_identity)
-    register_net_age(app, activity_credentials, unified.public, credential_cache, database, recover_activity_identity)
+    register_net_age(app, lambda login_id:activity_credentials(login_id, allow_cached=True),
+                     unified.public, credential_cache, database, recover_activity_identity)
     register_mobile_rights(app, unified.public, unified.credentials, storage=database, cache=credential_cache,
                            recover=recover_activity_identity, accept_credentials=accept_bill_credentials)
 
@@ -1267,6 +1268,8 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
     features.bind_scheduler('checkin', checkin_scheduler, background=('tick','check_startup','_enqueue'), workers=('_perform','_refresh'))
     features.bind_scheduler('monthly-coupon', monthly_scheduler, background=('tick','check_startup','_queue'), workers=('_perform',))
     features.bind_scheduler('star-day', star_scheduler, background=('tick','_queue'), workers=('_perform','calibrate'))
+    features.bind_scheduler('net-age', app.extensions['net_age_surprise_scheduler'],
+        background=('tick','login_restored'),workers=('_perform',))
     if enable_recharge:
         features.bind_scheduler('recharge', recharge.extensions['scheduler'],
             background=('tick','_sync_automatic'), workers=('_worker','_run_attempts'))
@@ -1292,6 +1295,7 @@ if __name__ == "__main__":
     app.extensions['checkin_scheduler'].start()
     app.extensions['monthly_coupon_scheduler'].start()
     app.extensions['star_day_scheduler'].start()
+    app.extensions['net_age_surprise_scheduler'].start()
     app.extensions['platform_manager'].start()
     app.extensions['recharge_app'].extensions['scheduler'].start()
     from network_access import create_http_server

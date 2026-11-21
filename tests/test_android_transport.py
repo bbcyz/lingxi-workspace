@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 @unittest.skipUnless(importlib.util.find_spec('httpx'), 'Android transport tests require httpx')
@@ -59,6 +59,19 @@ class AndroidTransportTests(unittest.TestCase):
             self.assertIn('a=1', dict(json.loads(call[2]))['cookie'])
             self.assertEqual(call[3], b'sid=x&answer=user%2Binput')
             self.assertEqual(call[4:], (True, 5, 15))
+
+    def test_weekly_flash_clock_calibration_uses_android_options_without_redeeming(self):
+        from checkin_flash import CLOCK_URL, calibrate_flash_clock
+        self.headers=[['Date','Thu, 29 Oct 2026 04:00:00 GMT']]
+        clock=1793246400
+        timeline=[value for _ in range(3) for value in (clock+0.1,clock+0.2)]
+        with patch('checkin_flash.time',SimpleNamespace(time=Mock(side_effect=timeline))):
+            result=calibrate_flash_clock(session_factory=self.module.requests.Session,samples=3)
+        self.assertEqual(result['state'],'ready')
+        self.assertEqual(result['samples'],3)
+        self.assertAlmostEqual(result['offset_ms'],350,places=3)
+        self.assertEqual([call[:2] for call in self.calls],[('OPTIONS',CLOCK_URL)]*3)
+        self.assertTrue(all(call[3]==b'' and call[4:]==(True,5,10) for call in self.calls))
 
     def test_wallet_sdk_cookie_secure_flag_is_supported_and_preserved(self):
         with self.module.requests.Session() as client:

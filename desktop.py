@@ -116,6 +116,7 @@ def main():
     app.extensions['checkin_scheduler'].start()
     app.extensions['monthly_coupon_scheduler'].start()
     app.extensions['star_day_scheduler'].start()
+    app.extensions['net_age_surprise_scheduler'].start()
     app.extensions['platform_manager'].start()
     app.extensions['recharge_app'].extensions['scheduler'].start()
     try:
@@ -140,6 +141,7 @@ def main():
         app.extensions['checkin_scheduler'].shutdown()
         app.extensions['monthly_coupon_scheduler'].shutdown()
         app.extensions['star_day_scheduler'].shutdown()
+        app.extensions['net_age_surprise_scheduler'].shutdown()
         app.extensions['platform_manager'].shutdown()
         app.extensions['recharge_app'].extensions['scheduler'].stop()
         server.close()

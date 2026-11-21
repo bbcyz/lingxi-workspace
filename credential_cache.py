@@ -119,7 +119,7 @@ class CredentialCache:
                 if self.storage:self.storage.delete_credentials(login_id=key[1],scope=scope)
                 self.entries.pop(key,None)
 
-    def sync(self, client):
+    def sync(self, client, *, data=None):
         """Persist server-rotated cookies for the same established auth generation."""
         scope,snapshot,_,headers,generation = client._credential_binding
         key = scope,self.account(snapshot)
@@ -131,11 +131,14 @@ class CredentialCache:
                         'domain_specified':c.domain_specified,'domain_initial_dot':c.domain_initial_dot,
                         'path_specified':c.path_specified,'expires':c.expires,'rest':c._rest} for c in client.cookies.jar]
             selected = {name:client.headers[name] for name in headers if name in client.headers}
-            if cookies == saved['cookies'] and selected == saved['headers']:
+            current_data = deepcopy(saved['data'] if data is None else data)
+            if cookies == saved['cookies'] and selected == saved['headers'] and current_data == saved['data']:
                 return
-            updated = {**saved,'cookies':cookies,'headers':selected,'expires_at':self._expiry(cookies,selected,saved.get('expiry_cookies'))}
+            updated = {**saved,'cookies':cookies,'headers':selected,'data':current_data,
+                       'expires_at':self._expiry(cookies,selected,saved.get('expiry_cookies'))}
             if self.storage:self.storage.save_credentials(*key,updated)
             self.entries[key] = updated
+            client._credential_data = deepcopy(current_data)
 
     def recover(self, client):
         """One recovery after an explicit auth rejection of a read-only request."""

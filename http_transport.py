@@ -84,6 +84,9 @@ else:
         def post(self, url, **kwargs):
             return self.request('POST', url, **kwargs)
 
+        def options(self, url, **kwargs):
+            return self.request('OPTIONS', url, **kwargs)
+
         def close(self):
             for client in self.clients.values():
                 client.close()
