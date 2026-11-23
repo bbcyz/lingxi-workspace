@@ -89,6 +89,22 @@ class UsageQueryTests(unittest.TestCase):
         self.assertEqual(partial['remaining_percent'],'65.10')
         self.assertEqual(partial['used'],'3573.64')
 
+    def test_overview_rounds_gb_like_the_app_while_detail_keeps_its_display_precision(self):
+        body = deepcopy(REMAIN)
+        directed = body['newPlanRemainQryRes']['planRemianFlowListRes']['planRemianFlowRes'][1]
+        directed.update(flowSumNum='75', flowUsdNum='21.324', flowRemainNum='53.676')
+        plan = directed['planRemianFlowInfoRes'][0]
+        plan['plantype'] = '01'
+        plan['flowInfoRes'][0].update(totalRes='75', usedRes='21.324', remainRes='53.676')
+        result = normalize_usage(body, PLANS, COUNTRY, NOW)
+        summary = next(item for item in result['overview'] if item['name'] == '定向流量')
+        detail = next(group for group in result['groups'] if group['name'] == '定向流量')['items'][0]['children'][0]
+        self.assertEqual(summary['display']['remaining'], {'value':'53.68','unit':'GB'})
+        self.assertEqual(detail['display']['remaining'], {'value':'53.67','unit':'GB'})
+        self.assertEqual(summary['remaining'], '53.676')
+        self.assertEqual(summary['used_percent'], '28.43')
+        self.assertEqual(summary['remaining_percent'], '71.56')
+
     def test_display_preserves_tiny_allowances_and_does_not_invent_wrapper_totals(self):
         child={'unit':'GB','total':'0.0001','used':'0','remaining':'0.0001'}
         wrapper={'unit':'','total':None,'used':None,'remaining':None,'children':[child]}

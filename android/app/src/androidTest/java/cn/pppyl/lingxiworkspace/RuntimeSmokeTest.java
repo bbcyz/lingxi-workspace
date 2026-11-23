@@ -41,7 +41,7 @@ public final class RuntimeSmokeTest {
             os.environ['LINGXI_DATA_DIR']=data_dir
             from app import app
             from runtime_paths import VERSION
-            assert VERSION=='1.9.10'
+            assert VERSION=='1.10.0'
             assert not app.extensions['unified_logins'].public()
             assert 'net_age_surprise_scheduler' in app.extensions
             from activities.net_age_protocol import PythonWheel

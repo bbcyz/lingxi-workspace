@@ -4,8 +4,9 @@ from threading import RLock
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
+from urllib.parse import parse_qs, urlsplit
 
-from recharge.checkin import ContinuousCheckin,sign_state
+from recharge.checkin import ContinuousCheckin, INVITE_COMMAND_PATH, invitation_command, sign_state
 from recharge.cmcc import ActivityError,ActivityClient,SHANGHAI
 
 NOW=datetime(2026,11,6,12,tzinfo=SHANGHAI)
@@ -36,6 +37,53 @@ class WednesdayCheckinTests(unittest.TestCase):
             result=self.daily.run('a',submit=True)
             self.assertEqual(result['action'],'manual');self.assertEqual(result['task_id'],task_id)
         self.client.call.assert_not_called();self.client.http.get.assert_not_called()
+
+    def test_invite_uses_the_current_accounts_device_and_official_poster_target(self):
+        self.client.read.return_value = progress(2)
+        self.client.const_id = 'test-device'
+        self.client.ensure_browser = Mock()
+        self.client.call.return_value = {'code':'0','data':'issued+code/='}
+        with patch('recharge.checkin.invitation_command', return_value='官方示例口令') as generate:
+            invitation = self.daily.run('a', invite=True)
+        self.client.read.assert_called_once_with('querySignActInfo')
+        self.client.call.assert_called_once_with('getInviteCode', {'constId':'test-device'})
+        self.client.ensure_browser.assert_not_called()
+        link = urlsplit(invitation['invite_url'])
+        self.assertEqual(link.hostname, 'h.app.coc.10086.cn')
+        target = urlsplit(parse_qs(link.query)['targetUrl'][0])
+        self.assertEqual(target.hostname, 'wx.10086.cn')
+        self.assertEqual(target.path, '/hlwyxhdhub/act-wedrecharge/1024101716')
+        self.assertEqual(parse_qs(target.query), {'shareCodes':['issued+code/=']})
+        generate.assert_called_once_with(self.client, target.geturl())
+        self.assertEqual(invitation['invite_command'], '官方示例口令')
+        self.assertNotIn('issued+code', str(self.storage.data))
+        self.assertEqual(self.storage.data['records']['a']['progress']['status'], '待邀请')
+
+    def test_invite_command_uses_the_same_app_account_and_exact_share_target(self):
+        image = 'https://qwhdcdn.cmcc-cs.cn/example.png'
+        snapshot = {'phone':'13800000000','cookie':'fixture','app_context':{}}
+        self.client.app_material = {'phone':snapshot['phone']}
+        self.client._app_credential_snapshot = Mock(return_value=snapshot)
+        self.client.read.return_value = {'code':'0','data':{'homeImg':{'klImg':image}}}
+        target = 'https://wx.10086.cn/hlwyxhdhub/act-wedrecharge/1024101716?shareCodes=fixture'
+        with patch('recharge.checkin.AppLoginSession.from_credentials') as session:
+            session.return_value.call.return_value = (200, {'retCode':'000000','rspBody':{'commandInfo':'官方示例口令'}}, {})
+            self.assertEqual(invitation_command(self.client, target), '官方示例口令')
+        session.assert_called_once_with(snapshot)
+        path, payload = session.return_value.call.call_args.args
+        self.assertEqual(path, INVITE_COMMAND_PATH)
+        self.assertEqual(payload['urlAddress'], target)
+        self.assertEqual(payload['imageUrl'], image)
+        self.assertEqual(payload['cellNum'], payload['shareNum'])
+        self.assertEqual(payload['cellNum'], snapshot['phone'])
+
+    def test_invite_stops_when_official_progress_has_already_moved_on(self):
+        self.client.read.return_value = progress(3, today=True)
+        with self.assertRaises(ActivityError) as error:
+            self.daily.run('a', invite=True)
+        self.assertEqual(error.exception.code, 'SIGN_INVITE_NOT_AVAILABLE')
+        self.client.call.assert_not_called()
+        self.assertTrue(self.storage.data['records']['a']['progress']['today_signed'])
 
     def test_first_day_browses_and_waits_then_submits_only_its_task(self):
         self.client.read.side_effect=[progress(),progress(1,True)]
@@ -129,7 +177,7 @@ class WednesdayCheckinTests(unittest.TestCase):
         with self.assertRaises(ActivityError):self.daily.configure({'enabled':True,'time':'26:00'})
 
     def test_write_endpoints_cannot_use_read_recovery(self):
-        for endpoint in ('signFinishTask','receiveSign'):
+        for endpoint in ('signFinishTask','receiveSign','getInviteCode'):
             with self.assertRaises(ActivityError):ActivityClient.read(self.client,endpoint)
 
 if __name__=='__main__':unittest.main()

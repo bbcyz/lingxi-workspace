@@ -42,7 +42,9 @@
     $('monthly-summary').textContent=`显示 ${shown.length} / ${model.accounts.length} 个 · 直接已领 ${model.accounts.filter(account=>claimed(account.direct_state)).length} 个 · 额外已领 ${model.accounts.filter(account=>claimed(account.bonus_state)).length} 个`;
     const rows=shown.map(account=>{
       const row=node('tr'),selection=node('td','monthly-cell-select'),check=node('input');check.type='checkbox';check.checked=selected.has(account.id);check.disabled=working||!available(account);check.setAttribute('aria-label',`选择 ${account.name||account.phone_masked}`);check.addEventListener('change',()=>{if(check.checked)selected.add(account.id);else selected.delete(account.id);updateSelection();});selection.append(check);
-      const identity=node('td');identity.append(node('strong','',account.name||account.phone_masked),node('small','',account.phone_masked));
+      const identity=node('td');identity.setAttribute('data-workspace-account',account.id);
+    identity.setAttribute('data-workspace-phone',account.phone_masked||'');
+    identity.append(node('strong','',account.name||account.phone_masked),node('small','',account.phone_masked));
       if(account.status!=='active')identity.append(node('small','monthly-account-warning',account.status==='login_required'?'需要重新登录':account.status==='restoring'?'正在恢复登录':'等待重连'));
       if(account.eligible===false)identity.append(node('small','monthly-account-warning','不符合本活动条件'));
       const direct=node('td'),directUsed=account.direct_receipt?.status==='used';direct.append(badge(directUsed?'used':account.direct_state||'unknown'));if(prizeName(account.direct_prize))direct.append(node('strong','monthly-prize',prizeName(account.direct_prize)));if(directUsed&&account.direct_receipt.used_at)direct.append(node('small','','使用于 '+dateFormat(account.direct_receipt.used_at)));if(account.direct_message)direct.append(node('p','monthly-result',account.direct_message));

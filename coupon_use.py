@@ -20,20 +20,25 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit, parse_qs
 
 from cryptography.exceptions import InvalidTag
-from http_transport import requests
+from http_transport import requests,CurlHttpVersion
 
 from coupon_client import (CouponClient, CouponError, ORIGIN, ENTRY, _cbc_encrypt,
                            _item, _payload, _unpack, RECHARGE_CARD_TYPES, COUPON_PROTOCOLS)
 from coupon_alipay import CouponAlipay, CouponAlipayError
 from app_login import AppLoginSession
 from coupon_reminders import CouponReminders
+from coupon_recharge_device import RechargeDevices, RechargeDeviceError
+from coupon_native_captcha import RechargeCaptchaError
 
 
 # The official recharge confirmation states payment must finish within 30 minutes.
 # This is the order's payment window, independent of coupon validity or login TTL.
 PAYMENT_WINDOW_SECONDS = 30*60
 WALLET_LOGIN_ERRORS = {'500003', 'COUPON_LOGIN_REQUIRED'}
+# Recharge 531022 has a separate re-login rule; it does not expire wallet/device credentials.
 USE_RELOGIN_ERRORS = WALLET_LOGIN_ERRORS | {'APP_LOGIN_REQUIRED', 'APP_SESSION_EXPIRED', '531022'}
+CAPTCHA_PENDING = {'state':'verification_required','verification':'captcha',
+                   'message':'正在等待中国移动官方验证，通过后会继续生成待支付订单。'}
 
 
 class CouponUseError(CouponError):
@@ -140,7 +145,7 @@ def _choices(rule, amount_rule=None):
 
 class CouponUseManager:
     def __init__(self, credentials_provider_by_id, storage=None, *, payment_credentials_provider_by_id=None,
-                 wallet_entry=ENTRY, credential_cache=None, app_session_recover=None):
+                 wallet_entry=ENTRY, credential_cache=None, app_session_recover=None, recharge_devices=None,recharge_captcha=None):
         self.credentials = credentials_provider_by_id
         self.payment_credentials = payment_credentials_provider_by_id or credentials_provider_by_id
         self.storage = storage
@@ -151,6 +156,8 @@ class CouponUseManager:
         self.payment_challenges = {}
         self.data = (storage.load_coupon_use_data() if storage is not None else None) or {}
         self.reminders = CouponReminders(storage)
+        self.recharge_devices = recharge_devices if recharge_devices is not None else RechargeDevices(storage)
+        self.recharge_captcha=recharge_captcha
         if any(record['state'] == 'submitted' for record in self.data.values()):
             recovered = deepcopy(self.data)
             for record in recovered.values():
@@ -260,7 +267,7 @@ class CouponUseManager:
                          'enableType': 0, 'provCode': user['province'], 'channel': '11', 'additionFlag': 1})
                     amount_rule = rules.get('amountRule') or {}
                 return _choices(rule, amount_rule)[0]
-            self.reminders.observe(login_id, items, rows, state=state, quote=quote)
+            self.reminders.observe(login_id, items, rows, state=state, quote=quote, sort=sort)
         with self.lock:
             operation = next((item for item in reversed(self.operations.values())
                 if item.login_id == login_id and item.context is not None and item.result is None), None)
@@ -481,7 +488,11 @@ class CouponUseManager:
             phone_path = base64.b64encode(_cbc_encrypt(user['number']).encode()).decode()
             path = path.replace('/'+user['number'], '/'+phone_path, 1)
         try:
-            response = client.post(ORIGIN+path, json=encoded, timeout=(10, 25), allow_redirects=False)
+            # The recharge gateway rejects otherwise valid HTTP/2 order
+            # requests for some accounts. Keep the same cookies and proof,
+            # and use its working HTTP/1.1 submission protocol.
+            transport={'http_version':CurlHttpVersion.V1_1}if path.startswith('/i/v1/pay/saveorderh5/')else{}
+            response = client.post(ORIGIN+path, json=encoded, timeout=(10, 25), allow_redirects=False,**transport)
         except requests.RequestsError as error:
             if submitting:
                 raise _UnknownSubmission('提交连接中断，结果待核实；请在 APP 查询，不会自动重发。', 'RESULT_UNKNOWN') from error
@@ -524,14 +535,23 @@ class CouponUseManager:
                             '510004': '验证码错误次数过多，请稍后重新获取。', '510006': '官方已限制短信验证，请在 APP 处理。',
                             '510005': '短信验证码重发次数过多，请稍后再试。', '510007': '操作过于频繁，请稍后再试。',
                             '531015': '下单操作频繁，请稍后再试（531015）。',
-                            '531022': '官方检测到充值环境异常（531022），本次未生成支付订单。请在账号管理恢复登录，再核对用券条件。'}
+                            '531022': '官方检测到充值环境异常（531022），本次未生成支付订单。请在账号管理重新登录，再核对用券方案。'}
                 message = messages.get(code, '官方拒绝此操作（'+code[:30]+'），本次未完成。')
-                if code in ('400010', '500002', '500004') and isinstance(value.get('retMsg'), str):
+                if code in ('400010', '500002', '500004','531022','537023') and isinstance(value.get('retMsg'), str):
                     detail = value['retMsg']
                     for secret in (user['number'], operation.serial, *[body.get(key) for key in
                             ('pCardNo', 'pcardNo', 'pcardPassword', 'smsCode', 'sms_code', 'serialNo', 'serial_no', 'md5', 'wtAcId')]):
                         if isinstance(secret, str) and len(secret) >= 4:
                             detail = detail.replace(secret, '***')
+                    if path.startswith('/i/v1/pay/saveorderh5/'):
+                        business=json.loads(base64.b64decode(body['param']))
+                        for key in ('fkToken','pCardNo','appUid','uid','appImei'):
+                            secret=business.get(key)
+                            if isinstance(secret,str)and len(secret)>=4:
+                                detail=detail.replace(secret,'***')
+                                if key=='fkToken':
+                                    for part in secret.split(':'):
+                                        if len(part)>=4:detail=detail.replace(part,'***')
                     detail = re.sub(r'1[3-9]\d{9}', lambda match: match[0][:3]+'****'+match[0][-4:], detail).strip()[:240]
                     if detail:
                         message += '\n官方说明：'+detail
@@ -570,8 +590,19 @@ class CouponUseManager:
         if operation.kind == 'recharge':
             self._post(operation, '/i/v1/cust/pcardCheck/'+user['number'],
                        {'phoneNo': user['number'], 'busiType': 'hf01', 'pcardNo': row['pCardNo'], 'channel': '11'})
-        rule = self._post(operation, '/i/v1/pay/ruleinfo/'+user['number'],
-            {'payPhoneNo': user['number'], 'pCardNo': row['pCardNo'], 'homeProv': user['province'], 'channel': '0003'})
+            phone = base64.b64encode(_cbc_encrypt(user['number']).encode()).decode()
+            rules = self._post(operation, '/i/v1/pay/payrule/'+phone,
+                {'amountFlag': 1, 'saleFlag': 1, 'enableFlag': 1, 'couponFlag': 1, 'saleQueryType': 2,
+                 'cellNum': user['number'], 'phoneNo': base64.b64encode(user['number'].encode()).decode(),
+                 'enableType': 0, 'provCode': user['province'], 'channel': '11', 'additionFlag': 1})
+            coupons = rules.get('couponRules')
+            if not isinstance(coupons, list):
+                raise CouponUseError('官方未返回当前充值券规则，本次没有提交。', 'RULE_MISSING', 409)
+            rule = next((item for item in coupons if (item.get('pcardNo') or item.get('pCardNo')) == row['pCardNo']), {})
+            operation.amount_rule = rules.get('amountRule') or {}
+        else:
+            rule = self._post(operation, '/i/v1/pay/ruleinfo/'+user['number'],
+                {'payPhoneNo': user['number'], 'pCardNo': row['pCardNo'], 'homeProv': user['province'], 'channel': '0003'})
         if not rule.get('operateId'):
             raise CouponUseError('官方未返回有效用券规则，本次没有提交。', 'RULE_MISSING', 409)
         return rule
@@ -594,6 +625,18 @@ class CouponUseManager:
         operation.recharge_profile = profile
         device = {key: profile.get(key) or '' for key in
                   ('sb', 'sn', 'osType', 'packageName', 'imei', 'loginProvince', 'loginCity')}
+        if operation.kind == 'recharge' and (snapshot.get('app_context') or {}).get('device_id'):
+            # The profile response contains account data, not the client fields
+            # already used to establish this APP identity. Reuse that client's
+            # envelope only when its device context was actually persisted.
+            login_device = AppLoginSession.from_credentials(snapshot).envelope({})
+            for key in ('sb', 'sn', 'packageName', 'imei'):
+                if not device[key]:
+                    device[key] = login_device[key]
+            if not device['osType'] and login_device['st'] == '1':
+                device['osType'] = 'android'
+            device['loginProvince'] = device['loginProvince'] or profile.get('provinceCode') or ''
+            device['loginCity'] = device['loginCity'] or profile.get('cityCode') or ''
         if operation.kind != 'recharge':
             login_device = AppLoginSession.from_credentials(snapshot).envelope({})
             device.update({key: login_device[key] for key in ('sb', 'sn', 'packageName', 'imei')})
@@ -601,6 +644,8 @@ class CouponUseManager:
                           loginCity=profile.get('cityCode') or '')
             android_id = (snapshot.get('app_context') or {}).get('device_id', '')[:16]
             device['imei'] = profile.get('imei') or ('AndroidId:'+android_id+'0' if android_id else '')
+        if operation.kind == 'recharge':
+            operation.recharge_profile = {**profile, **device}
         signed = 'B3A128FA'+operation.uid+'B3A128FA'
         assertion = {'UID': operation.uid, 'sign': hmac.new(b'', signed.encode(), hashlib.md5).hexdigest(),
                      'deviceInfo': device}
@@ -651,7 +696,9 @@ class CouponUseManager:
             with existing.lock, self._release_on_relogin(existing):
                 if existing.context is not None and existing.result is None and time.monotonic() < existing.expires:
                     existing.current()
-                    return deepcopy(existing.preview)
+                    preview=deepcopy(existing.preview)
+                    if existing.captcha_required:preview.update(CAPTCHA_PENDING)
+                    return preview
         client = CouponClient(lambda: self.credentials(login_id), entry=self.wallet_entry,credential_cache=self.credential_cache,
             app_session_recover=(lambda snapshot:self.app_session_recover(login_id,snapshot)) if self.app_session_recover else None)
         context = client._session()
@@ -660,7 +707,8 @@ class CouponUseManager:
             client=http, user=user, current=current, context=context, expires=time.monotonic()+600,
             lock=Lock(), kind='', row=None, rule=None, choices=[], serial='', md5='', result=None,
             captcha_required=False, verified_sms=None, sdk_bound=False, risk_user_agent='',
-            risk_token='', risk_callback_matches_c1=False, sms_sent=False, detail={}, retry_of=retry_of)
+            risk_token='', risk_callback_matches_c1=False, sms_sent=False, detail={}, retry_of=retry_of,
+            recharge_device=None,auto_captcha_attempted=False)
         try:
             app_cookie = self.credentials(login_id)['cookie'].split(';', 1)[0].split('=')
             entry_query = parse_qs(urlsplit(self.wallet_entry).query, keep_blank_values=True)
@@ -704,12 +752,7 @@ class CouponUseManager:
             if operation.kind == 'recharge':
                 if requires_sms:
                     raise CouponUseError('此充值券需要 APP 二次验证，请前往 APP 使用。', 'VERIFICATION_REQUIRED', 409)
-                encrypted_phone = base64.b64encode(_cbc_encrypt(user['number']).encode()).decode()
-                pay_rules = self._post(operation, '/i/v1/pay/payrule/'+encrypted_phone,
-                    {'amountFlag': 1, 'saleFlag': 1, 'enableFlag': 1, 'couponFlag': 1, 'saleQueryType': 2,
-                     'cellNum': user['number'], 'phoneNo': base64.b64encode(user['number'].encode()).decode(),
-                     'enableType': 0, 'provCode': user['province'], 'channel': '11', 'additionFlag': 1})
-                operation.choices = _choices(operation.rule, pay_rules.get('amountRule'))
+                operation.choices = _choices(operation.rule, operation.amount_rule)
             current()
             operation.requires_sms = bool(requires_sms)
             operation.preview = {'operation_id': operation.id, 'kind': operation.kind,
@@ -719,7 +762,8 @@ class CouponUseManager:
                 'description': str(row.get('stallInfo') or ''),
                 'requires_sms': operation.requires_sms,
                 'choices': [{'value': choice['value'], 'label': choice['label']} for choice in operation.choices],
-                'message': '确认后提交兑换申请，无需支付费用。' if operation.kind != 'recharge' else '确认后生成待支付充值订单，并显示官方支付入口。'}
+                'message': '确认后提交兑换申请，无需支付费用。' if operation.kind != 'recharge' else
+                    '确认后生成待支付充值订单，并显示官方支付入口。请在 30 分钟内支付；未付且未取消时，原券会占用 48 小时。'}
             if retry_of:
                 operation.preview['message'] = '官方当前显示此券可用，上次结果仍未确认。点击“确认兑换”才会重新提交；本次不会自动重试。'
             with self.lock:
@@ -799,6 +843,29 @@ class CouponUseManager:
             operation.risk_user_agent = headers.get('User-Agent', '')
             return response
 
+    def _prepare_recharge_device(self, operation):
+        if operation.recharge_device is not None:
+            return
+        with self.lock:
+            prior=self.data.get(operation.key)or{}
+            previous=prior.get('result')or{}
+            completion=(getattr(self.recharge_devices,'complete_registered_client',None)
+                if prior.get('state')=='failed'and previous.get('code')=='531022'
+                    and(previous.get('device_preparation')or{}).get('provider')=='m1'else None)
+        try:
+            prepare=completion or self.recharge_devices.prepare
+            operation.recharge_device = prepare(operation.login_id,operation.client)
+        except RechargeDeviceError as error:
+            operation.recharge_device = {'prepared':False,'code':error.code,'remote_status':error.remote_status}
+            logging.getLogger(__name__).warning('coupon_recharge_device_result %s',_json({
+                'account_tail':operation.user['number'][-4:],**operation.recharge_device}))
+            if completion or error.code in ('RISK_RATE_LIMITED','RISK_STORAGE_FAILED','RISK_PREPARATION_CANCELLED'):
+                rejected=CouponUseError(str(error),error.code,error.status)
+                self._close(operation,error=rejected)
+                raise rejected from error
+            # The official recharge entry also continues once if device preparation fails.
+            # This never supplies a substitute ticket or a captcha success value.
+
     def confirm(self, operation_id, sms_code='', charge_amount='', captcha_token='', risk_token='', risk_lid='',
                 prepare_risk=False, browser_user_agent=''):
         if not isinstance(prepare_risk, bool):
@@ -808,13 +875,17 @@ class CouponUseManager:
         if any(not isinstance(value, str) or len(value) > 8192 or any(char in value for char in '\r\n;')
                for value in (risk_token, risk_lid)):
             raise CouponUseError('官方用券校验值无效，请重新打开用券窗口。', 'INVALID_RISK_TOKEN', 400)
+        return self._confirm(operation_id,sms_code=sms_code,charge_amount=charge_amount,captcha_token=captcha_token,
+            risk_token=risk_token,risk_lid=risk_lid,prepare_risk=prepare_risk,browser_user_agent=browser_user_agent)
+
+    def _confirm(self,operation_id,sms_code,charge_amount,captcha_token,risk_token,risk_lid,prepare_risk,browser_user_agent):
         with self._operation(operation_id) as operation:
             if operation.result is not None:
                 return dict(operation.result)
             with self.lock:
                 self._check_submission(operation.key, operation.retry_of)
             if operation.captcha_required and not captcha_token:
-                raise CouponUseError('请先完成中国移动官方图形验证，再确认生成订单。', 'CAPTCHA_REQUIRED', 400)
+                return dict(CAPTCHA_PENDING)
             if operation.requires_sms and (not isinstance(sms_code, str) or not re.fullmatch(r'\d{6}', sms_code)
                     or not (operation.sms_sent if operation.kind in ('rights', 'flow') else operation.serial)):
                 raise CouponUseError('请先获取并填写六位短信验证码。', 'SMS_REQUIRED', 400)
@@ -823,14 +894,40 @@ class CouponUseManager:
                 raise CouponUseError('请选择官方允许的充值档位。', 'INVALID_AMOUNT', 400)
             row, rule = operation.row, operation.rule
             if operation.kind == 'recharge':
+                self._prepare_recharge_device(operation)
                 row = self._row(operation)
                 if any(row.get(key) != operation.row.get(key) for key in
                        ('couponValue', 'valueFormat', 'cardVersion', 'pCardType', 'busiType', 'smsCheck', 'useChannel')):
+                    self._close(operation)
                     raise CouponUseError('官方卡券信息已变化，请重新打开用券窗口确认。', 'COUPON_CHANGED', 409)
+                quoted_limits = operation.amount_rule
                 rule = self._rule(operation, row)
                 if any(rule.get(key) != operation.rule.get(key) for key in
-                       ('operateId', 'saleType', 'saleCode', 'discountFormat', 'capDiscount', 'pcardType', 'pCardType')):
+                       ('operateId', 'saleType', 'saleCode', 'discountFormat', 'capDiscount', 'pcardType', 'pCardType')) or operation.amount_rule != quoted_limits:
+                    self._close(operation)
                     raise CouponUseError('官方用券规则已变化，请重新打开用券窗口确认。', 'RULE_CHANGED', 409)
+                if self.recharge_captcha is not None and not captcha_token:
+                    operation.auto_captcha_attempted = True
+                    try:
+                        captcha_token = self.recharge_captcha.solve(operation.client,login_id=operation.login_id)
+                    except RechargeCaptchaError as error:
+                        failed = {'state':'failed','code':error.code,'message':str(error),
+                                  'device_preparation':dict(operation.recharge_device)}
+                        self._close(operation);operation.result=failed
+                        logging.getLogger(__name__).warning('coupon_auto_captcha_failed %s',_json({
+                            'account_tail':operation.user['number'][-4:],'code':error.code,
+                            'remote_code':error.remote_code if isinstance(error.remote_code,(int,str))
+                                and re.fullmatch(r'[A-Za-z0-9_-]{1,32}',str(error.remote_code))else None}))
+                        with self.lock:
+                            updated=deepcopy(self.data)
+                            prior=updated.get(operation.key)
+                            attempts=list(prior.get('previous_attempts',[]))if prior else[]
+                            if prior:attempts.append({name:prior.get(name)for name in ('operation_id','state','result','created_at')})
+                            updated[operation.key]={'state':'failed','operation_id':operation.id,'result':failed,
+                                'login_id':operation.login_id,'coupon_id':operation.coupon_id,'kind':'recharge',
+                                'coupon_name':_item(row)['name'],'created_at':time.time(),'previous_attempts':attempts}
+                            self._save(updated)
+                        return dict(failed)
             user = operation.user
             verified_sms = (operation.serial, sms_code)
             if operation.kind == 'exchange' and operation.requires_sms and operation.verified_sms != verified_sms:
@@ -892,7 +989,7 @@ class CouponUseManager:
                     business.update(newAmount=choice['payment'], jkCardFee=choice['special_reduction'])
                 if 'imei' in profile:
                     business['appImei'] = profile['imei']
-                business.update(wtAc='', wtAcId='')
+                business.update(operation.attribution)
                 text = _json(business)
                 body = {'payhmcc': hmac.new(b'kk9n54Vh2Bc8aXChLHYPTQ==', ('123456'+text+'123456').encode(), hashlib.md5).hexdigest(),
                         'param': base64.b64encode(text.encode()).decode(), 'channel': '11'}
@@ -954,10 +1051,9 @@ class CouponUseManager:
                         if str(detail.get('couponStatus')) == '10':
                             result = {'state': 'accepted', 'message': '流量券已兑换，官方卡券记录已确认使用。'}
             except CouponError as error:
-                if operation.kind == 'recharge' and error.code in ('531023', '531027'):
+                if operation.kind == 'recharge' and not operation.auto_captcha_attempted and error.code in ('531023', '531027'):
                     challenge = True
-                    result = {'state': 'verification_required', 'verification': 'captcha',
-                              'message': '请完成中国移动官方图形验证，再确认生成待支付订单。'}
+                    result = {**CAPTCHA_PENDING,'code':error.code}
                 else:
                     rejection = error
                     result = {'state': 'failed', 'message': str(error), 'code': error.code}
@@ -965,6 +1061,8 @@ class CouponUseManager:
                 if not challenge:
                     self._close(operation, error=rejection)
             operation.captcha_required = challenge
+            if operation.kind == 'recharge':
+                result['device_preparation']=dict(operation.recharge_device)
             if not challenge:
                 operation.result = result
             with self.lock:

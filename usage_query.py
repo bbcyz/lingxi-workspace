@@ -8,7 +8,7 @@ import calendar
 from concurrent.futures import Future
 from copy import deepcopy
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 import json
 import re
 from threading import RLock
@@ -132,7 +132,7 @@ def _overage(rows, scope):
                   used='usageAmount') for row in rows]
 
 
-def _present_usage(item):
+def _present_usage(item, *, display_rounding=ROUND_DOWN):
     """Add readable display units while retaining every official source value."""
     item['display'] = {}
     for field in ('total', 'used', 'remaining'):
@@ -148,7 +148,7 @@ def _present_usage(item):
                 number, unit = megabytes, 'MB'
             else:
                 number, unit = megabytes*1024, 'KB'
-            shown = number.quantize(Decimal('.01'), rounding=ROUND_DOWN)
+            shown = number.quantize(Decimal('.01'), rounding=display_rounding)
             if number and not shown:
                 text = '<0.01' if number > 0 else '>-0.01'
             else:
@@ -226,9 +226,9 @@ def normalize_usage(body, plans, country, now, *, share=None, phone=None):
             if type_code == '0':
                 items.extend(_overage(overage, scope+' / 套餐外'))
             if items:
-                groups.append({'name': scope, 'items': items})
+                groups.append({'key': kind, 'name': scope, 'items': items})
         if overage and not any(str(row.get(type_key)) == '0' for row in _rows(section, array)):
-            groups.append({'name': '套餐外流量' if kind == 'flow' else '套餐外通话', 'items': _overage(overage, '套餐外')})
+            groups.append({'key': kind, 'name': '套餐外流量' if kind == 'flow' else '套餐外通话', 'items': _overage(overage, '套餐外')})
     for summary in _rows(messages, 'planRemianMSGRes'):
         name = {'0': '短信', '1': '彩信'}.get(str(summary.get('mSGType')), '短彩信类型 '+_text(summary.get('mSGType')))
         item = _item({**summary, 'unit': '02'}, name=name, scope=name, total='mSGSum', used='mSGuserd', remaining='mSGresSum')
@@ -237,7 +237,7 @@ def normalize_usage(body, plans, country, now, *, share=None, phone=None):
     msg_items = _plans(_rows(messages, 'planRemianMSGInfoRes'), 'msgInfoRes', 'planRemianMSGName', '短彩信')
     msg_items.extend(_overage(_rows(messages, 'outPlanInfoRes'), '短彩信 / 套餐外'))
     if msg_items:
-        groups.append({'name': '短彩信明细', 'items': msg_items})
+        groups.append({'key': 'sms', 'name': '短彩信明细', 'items': msg_items})
     other_items = [_item(row, name=' - '.join(_text(row[key]) for key in ('planName', 'otherName') if row.get(key)), scope='其他资源')
                    for row in _rows(other, 'planRemianOtherInfoRes')]
     other_items.extend(_overage(_rows(other, 'outPlanInfoRes'), '其他资源 / 套餐外'))
@@ -333,7 +333,7 @@ def normalize_usage(body, plans, country, now, *, share=None, phone=None):
     if not groups and all(row['used'] is None and row['remaining'] is None for row in overview):
         notes.append('官方暂未返回余量明细。')
     for item in overview:
-        _present_usage(item)
+        _present_usage(item, display_rounding=ROUND_HALF_UP)
     for group in groups:
         for item in group['items']:
             _present_usage(item)

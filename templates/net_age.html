@@ -15,14 +15,16 @@
   <header class="coupons-heading net-age-heading">
     <h1>网龄</h1><button type="button" id="age-refresh" class="secondary">刷新权益</button>
   </header>
-  <section class="coupons-account-panel" aria-labelledby="age-accounts-title">
+  <div class="workspace-account-layout">
+  <section class="workspace-account-rail coupons-account-panel" aria-labelledby="age-accounts-title">
     <div class="coupons-account-heading">
       <h2 id="age-accounts-title">共享账号 <span id="age-account-count">—</span></h2>
       <button type="button" class="portal-quiet" data-account-window>账号管理</button>
     </div>
     <p id="age-account-empty" class="net-age-muted" role="status">正在读取共享账号…</p>
-    <div id="age-accounts" class="coupons-accounts" role="group" aria-label="网龄使用账号"></div>
+    <div id="age-accounts" class="coupons-accounts workspace-account-list" role="group" aria-label="网龄使用账号"></div>
   </section>
+  <div class="workspace-account-content">
   <section class="coupons-panel" aria-labelledby="age-activities-title">
     <div class="net-age-activity-heading">
       <h2 id="age-activities-title">网龄权益</h2>
@@ -42,6 +44,8 @@
       {% endfor %}
     </ul>
   </section>
+  </div>
+  </div>
 </main>
 <dialog id="age-confirm" aria-labelledby="age-confirm-title">
   <form id="age-confirm-form">

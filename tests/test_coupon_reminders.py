@@ -39,15 +39,17 @@ class CouponReminderTests(unittest.TestCase):
         self.assertEqual(self.summary()['total'], 3)
 
     def test_strict_discount_boundary_uses_paid_over_credited_amount(self):
-        cases = [('boundary','91.00','100.00',False), ('below','90.99','100.00',True),
-                 ('bonus','30.00','37.00',True), ('small-bonus','30.00','32.00',False),
-                 ('reduction','18.00','20.00',True)]
-        for label, payment, credit, expected in cases:
+        cases = [('boundary','91.00','100.00',False,''), ('below','90.99','100.00',True,'9.1折'),
+                 ('bonus','30.00','37.00',True,'8.1折'), ('small-bonus','30.00','32.00',False,''),
+                 ('reduction','18.00','20.00',True,'9折'), ('round-half','17.70','20.00',True,'8.9折'),
+                 ('round-down','17.68','20.00',True,'8.8折'), ('round-integer','17.90','20.00',True,'9折')]
+        for label, payment, credit, expected, discount in cases:
             with self.subTest(label=label):
                 row = {**ROW, 'pCardType':'001', 'pcardId':label, 'pCardNo':label}
                 items = self.observe([row], Mock(return_value={'payment':payment,'credit':credit}))
                 self.assertEqual(self.summary()['total'], int(expected))
                 self.assertIs(items[0]['worth_recharging'], expected)
+                self.assertEqual(items[0]['recharge_discount'],discount)
 
     def test_quote_is_reused_for_duplicate_rows_refresh_and_restart_without_private_coupon_codes(self):
         row = {**ROW, 'pCardType':'001'}
@@ -55,15 +57,38 @@ class CouponReminderTests(unittest.TestCase):
         self.observe([row, row], quote)
         items = self.observe([row], quote)
         self.assertTrue(items[0]['worth_recharging'])
+        self.assertEqual(items[0]['recharge_discount'],'9折')
         quote.assert_called_once()
         reloaded = CouponReminders(self.storage)
         self.assertEqual(reloaded.summary([LOGIN], {}, NOW)['total'], 1)
         items = [_item(row)]
         reloaded.observe(LOGIN, items, [row], state='available', quote=quote)
         self.assertTrue(items[0]['worth_recharging'])
+        self.assertEqual(items[0]['recharge_discount'],'9折')
         quote.assert_called_once()
         self.assertNotIn(ROW['pCardNo'], json.dumps(self.storage.activities[SCOPE]))
         self.assertNotIn('msg_id', json.dumps(self.storage.activities[SCOPE]))
+
+    def test_exchange_then_exact_discount_order_keeps_inactive_coupons_last(self):
+        specs=[('future', '004', '2'),('higher','001','1'),('exchange-a','004','1'),
+               ('cheapest','001','1'),('lower','001','1'),('exchange-b','004','1'),('unknown','001','1')]
+        rows=[{**ROW,'pcardId':name,'pCardNo':name,'stallName':name,'pCardType':kind,'timeFlag':flag}
+              for name,kind,flag in specs]
+        payments={'higher':'18.08','cheapest':'17.80','lower':'18.02'}
+        def quote(row):
+            if row['stallName']=='unknown':raise CouponError('规则待确认','PRICE_UNKNOWN')
+            return {'payment':payments[row['stallName']],'credit':'20.00'}
+        items=self.observe(rows,quote)
+        self.assertEqual([item['name'] for item in items],
+            ['exchange-a','exchange-b','cheapest','lower','higher','unknown','future'])
+        self.assertEqual([item['recharge_discount'] for item in items[2:5]],['8.9折','9折','9折'])
+
+    def test_explicit_sort_keeps_official_order_but_inactive_coupons_still_go_last(self):
+        rows=[{**ROW,'pcardId':name,'pCardNo':name,'stallName':name,
+               'timeFlag':'2' if name=='future' else '1'} for name in ('future','first','second')]
+        items=[_item(row)for row in rows]
+        self.reminders.observe(LOGIN,items,rows,state='available',sort='expiring',quote=Mock())
+        self.assertEqual([item['name']for item in items],['first','second','future'])
 
     def test_changed_official_rules_require_fresh_quote_and_accounts_stay_separate(self):
         row = {**ROW, 'pCardType':'001'}

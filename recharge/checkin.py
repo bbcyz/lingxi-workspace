@@ -1,14 +1,56 @@
 """Wednesday recharge's monthly seven-day streak, separate from its weekly draw."""
 from copy import deepcopy
 from datetime import datetime, timedelta
+import json
 import logging
 import re
 from threading import RLock
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
+from app_login import AppLoginError, AppLoginSession
 from feature_runtime import ThreadPoolExecutor, feature_running
 from http_transport import RequestException
-from .cmcc import ActivityClient, ActivityError, SHANGHAI, public_prize
+from .cmcc import ActivityClient, ActivityError, ENTRY, SHANGHAI, public_prize
+
+
+INVITE_TRANSIT = 'https://h.app.coc.10086.cn/activity/zx/transit/transferDownload.html'
+INVITE_COMMAND_PATH = '/biz-orange/DN/command/getCommand'
+
+
+def invitation_command(client, target):
+    """Use the APP share-command endpoint for the just-issued assistance URL."""
+    activity = client.read('queryActivityInfo').get('data') or {}
+    image = (activity.get('homeImg') or {}).get('klImg')
+    if not isinstance(image, str) or not image.startswith('https://'):
+        raise ActivityError('官方暂未提供口令所需的活动图片。', 'SIGN_INVITE_COMMAND_IMAGE', 502)
+    snapshot = client._app_credential_snapshot()
+    if snapshot['phone'] != client.app_material['phone']:
+        raise ActivityError('活动账号已切换，请重新获取邀请。', 'SIGN_INVITE_ACCOUNT_CHANGED', 409)
+    flow = AppLoginSession.from_credentials(snapshot)
+    phone = snapshot['phone']
+    fields = ('pageId', 'channelId', 'extendId', 'sellerId')
+    body = {'cellNum': phone, 'shareNum': phone, 'urlAddress': target, 'imageUrl': image, 'channelCode': '11',
+            'activityName': '周三充值日低至8折', 'activitySubtitle': '给您分享了一个活动',
+            'commandMould': '我正在打卡获得8折充值券，******复制此消息，打开中国移动客户端为我助力，你也有机会参与得好礼哦',
+            'extension': json.dumps({key: key for key in fields}, separators=(',', ':'))}
+    try:
+        _, result, _ = flow.call(INVITE_COMMAND_PATH, body)
+    except AppLoginError as error:
+        raise ActivityError('连接官方口令服务失败，请稍后重试。', 'SIGN_INVITE_COMMAND_NETWORK', 502) from error
+    code = str(result.get('retCode', 'UNKNOWN'))
+    if code != '000000':
+        safe_code = code if re.fullmatch(r'[0-9A-Za-z_-]{1,20}', code) else 'UNKNOWN'
+        raise ActivityError(f'官方口令生成未成功（{safe_code}）。', 'SIGN_INVITE_COMMAND_REJECTED', 502)
+    data = result.get('rspBody')
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError as error:
+            raise ActivityError('官方口令响应格式异常。', 'SIGN_INVITE_COMMAND_FORMAT', 502) from error
+    command = data.get('commandInfo') if isinstance(data, dict) else None
+    if not isinstance(command, str) or not command.strip():
+        raise ActivityError('官方未返回邀请口令。', 'SIGN_INVITE_COMMAND_FORMAT', 502)
+    return command
 
 
 def sign_state(data, now):
@@ -33,7 +75,8 @@ def sign_state(data, now):
             'manual':'待邀请' if task_id=='yqyh' else '待充值' if task_id=='czhf' else '任务需人工完成'}
     message=task.get('task') or task.get('title') or '请在中国移动 APP 核对当日任务。'
     if action=='done':message='本月已领取8折话费券。' if received else '今日打卡已确认，明天继续。'
-    if action=='manual':message+= '；请在官方 APP 完成后点击“查询进度”。'
+    if action=='manual':
+        message+= '；获取链接分享给好友，助力后点击“查询进度”。' if task_id=='yqyh' else '；请在官方 APP 完成后点击“查询进度”。'
     return {'date':now.date().isoformat(),'month':now.strftime('%Y-%m'),'today_signed':today,
             'streak':streak,'day':day,'broken':broken,'received':received,'rd_status':rd,
             'action':action,'status':labels[action],'message':message,'task_id':task_id,
@@ -110,7 +153,7 @@ class ContinuousCheckin:
                 self.active.add(login['id'])
             self.pool.submit(self._execute,login,account,True,automatic=True)
 
-    def run(self, login_id, *, submit=False):
+    def run(self, login_id, *, submit=False, invite=False):
         login=next((a for a in self.accounts() if a['id']==login_id),None)
         if login is None:raise ActivityError('账号已退出，请重新选择。','ACCOUNT_NOT_FOUND',404)
         account=self.ensure_account(login)
@@ -118,9 +161,32 @@ class ContinuousCheckin:
         with self.lock:
             if login_id in self.active:raise ActivityError('此账号正在处理打卡，请稍候。','SIGN_BUSY',409)
             self.active.add(login_id)
-        return self._execute(login,account,submit)
+        return self._execute(login,account,submit,invite=invite)
 
-    def _execute(self, login, account, submit, *, automatic=False):
+    @staticmethod
+    def _invitation(client, progress):
+        if progress['action'] != 'manual' or progress['task_id'] != 'yqyh':
+            raise ActivityError('当前打卡进度没有待助力的邀请任务，请查询进度。', 'SIGN_INVITE_NOT_AVAILABLE', 409)
+        if not client.const_id:
+            client.ensure_browser()  # Existing account-bound device preparation runs without a browser.
+        if not client.const_id:
+            raise ActivityError('官方设备校验尚未就绪，请稍后获取邀请链接。', 'SIGN_INVITE_DEVICE_REQUIRED', 409)
+        result = client.call('getInviteCode', {'constId': client.const_id})
+        client.check_result(result)
+        code = result.get('data')
+        if not isinstance(code, str) or not code.strip():
+            raise ActivityError('官方未返回有效邀请码，请稍后重试。', 'SIGN_INVITE_FORMAT', 502)
+        # Match the third-day poster's QR target. Only the official share code leaves this account session.
+        target = ENTRY + '?' + urlencode({'shareCodes': code}, quote_via=quote)
+        link = INVITE_TRANSIT + '?' + urlencode({'targetUrl': target, 'pageId': '99992603311033047',
+            'channelId': 'P00000116211', 'sellerId': '1636941HD1301000012'}, quote_via=quote)
+        try:
+            return {'invite_url': link, 'invite_command': invitation_command(client, target)}
+        except ActivityError as error:
+            # A failed command request must not discard the working share link.
+            return {'invite_url': link, 'invite_command_error': str(error)}
+
+    def _execute(self, login, account, submit, *, automatic=False, invite=False):
         login_id=login['id'];now=self.now();day=now.date().isoformat()
         try:
             with account.client.operation_lock:
@@ -180,9 +246,11 @@ class ContinuousCheckin:
                 next_at=now if not submit and progress['action'] in {'sign','claim'} else tomorrow
                 self._update(login_id,message=progress['message'],state='ready',error_code=None,attempt_date=day,
                              attempted_at=progress['queried_at'],attempts=0,blocked=False,next_at=next_at.isoformat())
-                return progress
+                return self._invitation(client, progress) if invite else progress
         except (ActivityError,RequestException) as error:
             if not isinstance(error,ActivityError):error=ActivityError('连接官方打卡接口失败，请稍后查询核对。','UPSTREAM_NETWORK',502)
+            if invite:
+                raise error
             with self.lock:
                 previous=self.data['records'].get(login_id,{})
                 attempts=(previous.get('attempts',0) if previous.get('attempt_date')==day else 0)+1

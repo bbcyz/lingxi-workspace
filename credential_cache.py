@@ -46,25 +46,31 @@ class CredentialCache:
         return None
 
     @staticmethod
-    def _expiry(cookies, headers, names=None):
-        relevant=[cookie for cookie in cookies if names is None or cookie['name'] in names]
+    def _expiry(cookies, headers, names=None, excluded=None):
+        relevant=[cookie for cookie in cookies if cookie['name'] not in (excluded or ())
+                  and (names is None or cookie['name'] in names)]
         expiries=[token_expiry(cookie['value']) for cookie in relevant]
         expiries += [cookie['expires'] for cookie in relevant if names is not None or re.search('session|token|ticket',cookie['name'],re.I)]
         expiries += [token_expiry(value.removeprefix('Bearer ')) for value in headers.values()]
         return min((value for value in expiries if value is not None),default=None)
 
-    def connect(self, scope, snapshot, client, initialize, *, headers=(), aliases=(), expiry_cookies=None):
+    def connect(self, scope, snapshot, client, initialize, *, headers=(), aliases=(), expiry_cookies=None,
+                expiry_excluded_cookies=None):
         """Coalesce bootstrap only; each caller keeps its own operation session."""
         key = scope,self.account(snapshot)
         requested_at = time.monotonic()
         with self._key_lock(*key):
-            if expiry_cookies is not None:
-                names=list(expiry_cookies)
+            if expiry_cookies is not None or expiry_excluded_cookies is not None:
                 with self.lock:
                     if key not in self.entries:self.entries[key]=self.storage.load_credentials(*key) if self.storage else None
                     previous=self.entries[key]
-                    if previous and previous['phone']==snapshot['phone'] and previous.get('expiry_cookies')!=names:
-                        previous={**previous,'expiry_cookies':names,'expires_at':self._expiry(previous['cookies'],previous['headers'],names)}
+                    policy={}
+                    if expiry_cookies is not None:policy['expiry_cookies']=list(expiry_cookies)
+                    if expiry_excluded_cookies is not None:policy['expiry_excluded_cookies']=list(expiry_excluded_cookies)
+                    if previous and previous['phone']==snapshot['phone'] and any(previous.get(k)!=v for k,v in policy.items()):
+                        previous={**previous,**policy}
+                        previous['expires_at']=self._expiry(previous['cookies'],previous['headers'],
+                            previous.get('expiry_cookies'),previous.get('expiry_excluded_cookies'))
                         if self.storage:self.storage.save_credentials(*key,previous)
                         self.entries[key]=previous
             saved = self.load(scope,snapshot)
@@ -99,14 +105,16 @@ class CredentialCache:
                             'path_specified':c.path_specified,'expires':c.expires,'rest':c._rest} for c in client.cookies.jar]
                 selected = {k:client.headers[k] for k in headers if k in client.headers}
                 saved = {'phone':snapshot['phone'],'data':data,'cookies':cookies,'headers':selected,
-                    'expires_at':self._expiry(cookies,selected,expiry_cookies),
+                    'expires_at':self._expiry(cookies,selected,expiry_cookies,expiry_excluded_cookies),
                     'generation':secrets.token_hex(12),'created_at':self.now()}
                 if expiry_cookies is not None:saved['expiry_cookies']=list(expiry_cookies)
+                if expiry_excluded_cookies is not None:saved['expiry_excluded_cookies']=list(expiry_excluded_cookies)
                 # Do not invent a lifetime for opaque tokens or session cookies.
                 if self.storage:self.storage.save_credentials(*key,saved)
                 with self.lock:self.entries[key] = saved
             client._credential_binding = (scope,snapshot,initialize,tuple(headers),saved['generation'])
             client._credential_expiry_cookies=saved.get('expiry_cookies')
+            client._credential_expiry_excluded_cookies=saved.get('expiry_excluded_cookies')
             client._credential_data = deepcopy(saved['data'])
             return deepcopy(saved['data'])
 
@@ -135,7 +143,7 @@ class CredentialCache:
             if cookies == saved['cookies'] and selected == saved['headers'] and current_data == saved['data']:
                 return
             updated = {**saved,'cookies':cookies,'headers':selected,'data':current_data,
-                       'expires_at':self._expiry(cookies,selected,saved.get('expiry_cookies'))}
+                       'expires_at':self._expiry(cookies,selected,saved.get('expiry_cookies'),saved.get('expiry_excluded_cookies'))}
             if self.storage:self.storage.save_credentials(*key,updated)
             self.entries[key] = updated
             client._credential_data = deepcopy(current_data)
@@ -148,7 +156,8 @@ class CredentialCache:
         self.invalidate(client)
         client.cookies.clear()
         for header in headers:client.headers.pop(header,None)
-        self.connect(scope,snapshot,client,initialize,headers=headers,expiry_cookies=getattr(client,'_credential_expiry_cookies',None))
+        self.connect(scope,snapshot,client,initialize,headers=headers,expiry_cookies=getattr(client,'_credential_expiry_cookies',None),
+                     expiry_excluded_cookies=getattr(client,'_credential_expiry_excluded_cookies',None))
         return True
 
     def forget(self, login_id=None, *, scope=None):

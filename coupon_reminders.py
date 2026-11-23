@@ -1,7 +1,7 @@
 """Last-confirmed useful fee coupons; sidebar reads never contact the provider."""
 from copy import deepcopy
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
 from threading import RLock
@@ -44,17 +44,20 @@ class CouponReminders:
         self.data = (storage.load_activity_data(SCOPE) if storage else None) or {}
         self.account_locks = {}
 
-    def observe(self, owner, items, rows, *, state, quote):
+    def observe(self, owner, items, rows, *, state, quote, sort='default'):
         with self.lock:
             account_lock = self.account_locks.setdefault(owner, RLock())
         with account_lock:
             with self.lock:
                 previous = deepcopy(self.data.get(owner, {}).get('items', {}))
             observed = {} if state == 'available' else previous
+            priorities = {}
             stopped = False
             for item, raw in zip(items, rows):
                 item['worth_recharging'] = False
+                item['recharge_discount'] = ''
                 coupon_id = item['id']
+                priorities[coupon_id] = (0 if item['use_kind'] == 'exchange' else 2, Decimal(0))
                 if item['status'] != 'available' or item['category'] != 'fee':
                     observed.pop(coupon_id, None)
                     continue
@@ -86,7 +89,17 @@ class CouponReminders:
                             # Never initialize, send SMS or submit orders here.
                             stopped = error.status == 401 or error.code in ('RATE_LIMITED', '-800', '8053')
                 item['worth_recharging'] = entry['qualifies'] is True and entry.get('pricing') is not None
+                if entry.get('pricing') is not None:
+                    pricing=entry['pricing']
+                    ratio=Decimal(pricing['payment'])/Decimal(pricing['credit'])
+                    priorities[coupon_id]=(1,ratio)
+                if item['worth_recharging']:
+                    discount=(ratio*10).quantize(Decimal('.1'),rounding=ROUND_HALF_UP)
+                    item['recharge_discount']=f'{discount.normalize():f}折'
                 observed[coupon_id] = entry
+            if state == 'available':
+                items.sort(key=lambda item:(item['status'] != 'available',
+                    *(priorities[item['id']] if sort == 'default' else (0,Decimal(0)))))
             record = {'items': observed, 'checked_at': datetime.now(SHANGHAI).isoformat()}
             with self.lock:
                 updated = {**self.data, owner: record}

@@ -3,27 +3,33 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>信息查询 · 本地工具台</title><link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/static/portal.css"><link rel="stylesheet" href="/static/workspace.css"><link rel="stylesheet" href="/static/bills.css?v=services-search-1">
-  <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/static/bills.js?v=services-search-1" defer></script>
-  <link rel="stylesheet" href="/static/mobile.css?v=mobile-1">
+  <link rel="stylesheet" href="/static/portal.css"><link rel="stylesheet" href="/static/workspace.css"><link rel="stylesheet" href="/static/bills.css?v=usage-rows-2">
+  <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/static/bills.js?v=usage-rows-2" defer></script>
+  <link rel="stylesheet" href="/static/mobile.css?v=usage-cards-1">
   <script src="/static/mobile.js?v=mobile-1" defer></script>
   {% include 'theme_head.html' %}
 </head>
 <body class="workspace-app" data-workspace="bills"><main class="portal-shell bills-shell">
   <section class="bills-heading"><div><h1>信息查询</h1><p id="information-current-account" class="information-current-account">尚未选择账号</p></div><button id="bills-refresh" class="secondary" type="button">刷新信息</button></section>
-  <section class="bills-account-panel" aria-label="选择查询账号">
+  <div class="workspace-account-layout">
+  <section class="workspace-account-rail bills-account-panel" aria-label="选择查询账号">
     <div class="bills-account-heading"><h2>共享账号 <span id="bills-account-count">—</span></h2><span id="bills-account-hint">正在读取账号…</span></div>
-    <div id="bills-accounts" class="bills-accounts" role="group" aria-label="信息查询账号"></div>
+    <div id="bills-accounts" class="bills-accounts workspace-account-list" role="group" aria-label="信息查询账号"></div>
   </section>
+  <div class="workspace-account-content">
   <div id="information-feedback" class="bills-feedback" role="status" hidden><p id="information-feedback-message"></p></div>
   <nav class="information-section-nav" aria-label="查询内容"><a href="#usage-content">套餐余量</a><a href="#bills-content">月度账单</a><a href="#services-content">已订业务</a></nav>
   <div class="information-columns">
   <section id="usage-content" class="usage-panel" aria-label="套餐余量" aria-busy="false">
-    <div class="usage-toolbar"><div><h2>套餐余量</h2><span id="usage-current-account" class="bills-visually-hidden">尚未选择账号</span></div></div>
+    <div class="usage-toolbar">
+      <h2>套餐余量</h2>
+      <div class="usage-account-context"><span id="usage-current-account">尚未选择账号</span><button id="usage-plan" class="quiet" type="button" hidden></button></div>
+    </div>
     <div id="usage-feedback" class="bills-feedback" role="status" hidden><p id="usage-feedback-message"></p><button id="usage-relogin" class="secondary" type="button" hidden>恢复登录</button></div>
-    <div class="usage-overview-labels" aria-hidden="true"><span>资源</span><span>总量</span><span>已用</span><span>剩余</span></div>
-    <div id="usage-overview" class="usage-overview" aria-label="套餐余量概览"><p class="bills-empty">正在读取共享账号…</p></div>
-    <section class="usage-detail-section" aria-label="套餐余量明细"><div class="usage-details-heading"><h3>套餐明细</h3><span>展开查看用量及有效期</span></div><div id="usage-groups" class="usage-groups"></div></section>
+    <div class="usage-body">
+      <div id="usage-overview" class="usage-overview" aria-label="套餐余量概览"><p class="bills-empty">正在读取共享账号…</p></div>
+      <div id="usage-groups" class="usage-groups" aria-label="其他套餐明细" hidden></div>
+    </div>
     <details id="usage-notes" class="bills-notes" aria-label="官方余量说明" hidden><summary>官方说明</summary><ul id="usage-notes-list"></ul></details>
     <div class="bills-footer"><span id="usage-sync" role="status" aria-live="polite">尚未查询套餐余量</span></div>
   </section>
@@ -74,6 +80,8 @@
   </section>
   </div>
   <p class="bills-footnote">余量和已订业务为查询时的当前信息，账单按所选月份展示；“—”表示官方未提供该项信息。</p>
+  </div>
+  </div>
 </main>
 <dialog id="services-cancel-dialog" class="services-cancel-dialog" aria-labelledby="services-cancel-title">
   <header class="services-cancel-heading"><div><h2 id="services-cancel-title">退订确认</h2><p id="services-cancel-account"></p></div><button id="services-cancel-close" class="quiet services-cancel-close" type="button" aria-label="关闭退订确认">×</button></header>

@@ -73,7 +73,9 @@
     const rows = shown.map(account => {
       const row = node('tr'), progress = account.observation;
       const identity = node('td');
-      identity.append(node('strong', '', account.name || account.phone_masked), node('small', '', account.phone_masked));
+      identity.setAttribute('data-workspace-account',account.id);
+    identity.setAttribute('data-workspace-phone',account.phone_masked||'');
+    identity.append(node('strong', '', account.name || account.phone_masked), node('small', '', account.phone_masked));
       if (account.status !== 'active') identity.append(node('small', 'seven-login-warning', '需要重新登录'));
       const signin = node('td');
       if (progress.checked_today) signin.append(badge('今日已打卡', 'success'));

@@ -40,7 +40,7 @@ Python + Flask 本地网页，默认地址 http://127.0.0.1:5500/ 。
 
 卡券使用按官方协议类型复用，不按面额逐张适配。不同兑换接口、短信模板及待核实记录的处理见 [卡券兑换协议](COUPON_PROTOCOLS.md)。
 
-直接从 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/latest) 下载 `LingxiWorkspace-1.9.10-Windows-x64.exe`，双击运行，可直接转发给其他人。无需安装 Python 或 Node.js，界面在系统默认浏览器中打开；客户端不捆绑浏览器。周三活动和会员权益的设备参数由 Python 调度内嵌 V8 在本机计算。也提供 `LingxiWorkspace-1.9.10-Windows-x64.zip` 文件夹版，完整解压后双击其中的 `LingxiWorkspace.exe`，并保留旁边的 `_internal` 文件夹。
+直接从 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/latest) 下载 `LingxiWorkspace-1.10.0-Windows-x64.exe`，双击运行，可直接转发给其他人。无需安装 Python 或 Node.js，界面在系统默认浏览器中打开；客户端不捆绑浏览器。周三活动和会员权益的设备参数由 Python 调度内嵌 V8 在本机计算。也提供 `LingxiWorkspace-1.10.0-Windows-x64.zip` 文件夹版，完整解压后双击其中的 `LingxiWorkspace.exe`，并保留旁边的 `_internal` 文件夹。
 
 关闭标签页后客户端留在托盘继续执行定时任务，再次运行时复用已打开的页面，右键托盘图标可退出。启动时确认本地页面可访问后才打开浏览器；客户端 Cookie 名称与源码网页服务分离。账号及任务保存在 `%LOCALAPPDATA%\LingxiWorkspace`，与程序文件分离，升级无需搬运账号库。更新前先退出旧版本，首次使用登录自己的手机号。详细说明见 [DESKTOP.md](DESKTOP.md)。
 
@@ -48,11 +48,11 @@ Python + Flask 本地网页，默认地址 http://127.0.0.1:5500/ 。
 
 ## Android 独立版下载
 
-在 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/tag/v1.9.10) 下载 `LingxiWorkspace-1.9.10-Android-arm64.apk`，适用于 Android 7.0+ ARM64 手机。服务、账号和任务在手机本机运行，不需要连接电脑；更新时使用同一签名覆盖安装，保留本机数据。后台任务受系统电池策略影响，详细说明与构建方式见 [ANDROID.md](ANDROID.md)。
+在 [GitHub Releases](https://github.com/pppyl/lingxi-workspace/releases/tag/v1.10.0) 下载 `LingxiWorkspace-1.10.0-Android-arm64.apk`，适用于 Android 7.0+ ARM64 手机。服务、账号和任务在手机本机运行，不需要连接电脑；更新时使用同一签名覆盖安装，保留本机数据。后台任务受系统电池策略影响，详细说明与构建方式见 [ANDROID.md](ANDROID.md)。
 
 ## 页面与使用
 
-所有页面共用深色侧栏、蓝色操作按钮、浅灰背景与白色卡片。导航按功能分组：灵犀对话下有“即时对话、定时发送”，周三充值日是一个入口，“活动与奖品、领取任务”在同页切换；顶部共享账号卡片可筛选查看范围。账号管理作为公共入口，在当前页弹窗打开。首页展示真实账号数量、需验证账号、待执行的两类任务及最近回复；窄屏使用可展开的侧栏，任务表保持整页纵向滚动。
+所有页面共用深色侧栏、蓝色操作按钮、浅灰背景与白色卡片。导航按功能分组：灵犀对话下有“即时对话、定时发送”，周三充值日是一个入口，“活动与奖品、领取任务”在同页切换；电脑端的共享账号栏位于左侧，可切换账号或定位记录。账号管理作为公共入口，在当前页弹窗打开。首页展示真实账号数量、需验证账号、待执行的两类任务及最近回复；窄屏使用可展开的侧栏，任务表保持整页纵向滚动。
 
 - 功能首页：http://127.0.0.1:5500/
 - 账号管理：各页面点击按钮后在当前页面弹窗打开；也可直接访问 http://127.0.0.1:5500/accounts
@@ -257,7 +257,7 @@ node --test tests/test_lingxi_task_model.mjs
 
 ## Android 独立版
 
-下载发布页中的 `LingxiWorkspace-1.9.10-Android-arm64.apk`，适用 Android 7.0 及以上的 64 位 ARM 手机。安装后直接打开，无需电脑、Python 或 USB。界面通过系统 WebView 展示，Python 服务、SQLite、账号登录和定时任务均在手机内运行；应用仅监听手机回环地址，并由每次启动的随机会话限制访问。
+下载发布页中的 `LingxiWorkspace-1.10.0-Android-arm64.apk`，适用 Android 7.0 及以上的 64 位 ARM 手机。安装后直接打开，无需电脑、Python 或 USB。界面通过系统 WebView 展示，Python 服务、SQLite、账号登录和定时任务均在手机内运行；应用仅监听手机回环地址，并由每次启动的随机会话限制访问。
 
 登录凭据使用 Android Keystore 加密，Windows 仍使用 DPAPI。两端各自保存数据，不会把发布者账号打包，也不自动复制电脑的登录态。同一手机号遵循运营商的单点登录规则。付款始终由用户在官方 APP 手动完成。
 

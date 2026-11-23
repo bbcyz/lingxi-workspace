@@ -41,6 +41,8 @@ function renderAccounts(){
   $('checkin-account-summary').textContent=`显示 ${accounts.length} / ${model.accounts.length} 个账号 · 已确认今日签到 ${model.accounts.filter(account=>signedStates.has(account.today_state)).length} 个`;
   const rows=accounts.map(account=>{
     const row=node('tr'),identity=node('td'),today=node('td'),month=node('td'),recent=node('td'),automatic=node('td'),flash=node('td'),operations=node('td');
+    identity.setAttribute('data-workspace-account',account.id);
+    identity.setAttribute('data-workspace-phone',account.phone_masked||'');
     identity.append(node('strong','',account.name||account.phone_masked),node('small','',account.phone_masked));
     if(account.status!=='active')identity.append(node('small','checkin-account-unavailable',accountStateNames[account.status]||'暂不可用'));
     const todayState=account.today_state||'unknown';

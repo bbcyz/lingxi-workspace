@@ -243,7 +243,8 @@ class CouponClient:
             if self.credential_cache is None:
                 authenticate()
             else:
-                self.credential_cache.connect('coupon-wallet:12014',snapshot,client,authenticate)
+                self.credential_cache.connect('coupon-wallet:12014',snapshot,client,authenticate,
+                    expiry_excluded_cookies=('stc-rrt-token',))
             # loginfo supplies a fresh flow-specific msgId. It must not be
             # cached along with the reusable wallet login cookies.
             for attempt in range(2):

@@ -33,7 +33,7 @@
   const script=document.createElement('script');
   script.src=root+'decision-captcha/zw-captcha/index.js';script.onerror=failed;
   script.onload=()=>{
-    status.textContent='请拖动官方组件中的滑块。';
+    status.textContent='正在进行官方验证；如显示滑块，请拖动完成。';
     captchaWidth=loginChallenge?loginWidth():300;
     window._zw.Captcha(verify,{
       appId,customLanguage:{init_inform:'拖动一下'},

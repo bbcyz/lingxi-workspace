@@ -174,7 +174,7 @@
         const worthCharging=usable&&item.worth_recharging;
         if(usable&&item.category==='fee'&&item.use_kind==='exchange'){
           const tag=node('span','coupons-tag coupons-tag-redeem','值得兑');tag.title='无需充值，可直接兑换话费';heading.append(tag);
-        }else if(worthCharging){const tag=node('span','coupons-tag coupons-tag-worth','值得充');tag.title='最优充值方案的实付金额 ÷ 到账金额低于9.1折';heading.append(tag);}
+        }else if(worthCharging&&item.recharge_discount){const tag=node('span','coupons-tag coupons-tag-worth',item.recharge_discount);tag.title='按最优充值方案的实付金额与到账金额计算，四舍五入至一位小数';heading.append(tag);}
         if((item.use_kind!=='recharge'||worthCharging)&&remaining>0&&remaining<=3*24*60*60*1000){const tag=node('span','coupons-tag coupons-tag-expiring','快过期');tag.title='距离卡券到期不超过3天';heading.append(tag);}
       }
       name.append(heading,node('small','coupons-source',item.source||'来源未提供'));
@@ -270,6 +270,7 @@
     const needsLogin=Boolean(relogin?.required);
     $('coupons-use-recheck').hidden=needsLogin||!useRecheck;
     $('coupons-use-recheck').disabled=useBusy||useConfirming;
+    $('coupons-use-recheck').textContent=useRecheck?.expired?'重新准备':'核实上次结果';
     $('coupons-use-retry').hidden=needsLogin||!useRecheck?.can_retry;
     $('coupons-use-retry').disabled=useBusy||useConfirming;
     const terminal=useSubmitted&&!useConfirming;
@@ -315,6 +316,18 @@
     await prepareUse(item,generation,accountId);
   }
 
+  function showCaptcha(challenge){
+    captchaToken='';captchaRequired=true;
+    if(!paymentOrder)useSubmitted=false;
+    $('coupons-use-verification').hidden=false;
+    $('coupons-use-verification').querySelector('p').textContent=paymentOrder
+      ?'官方验证通过后会自动获取付款链接，无需再次点击。':'官方验证通过后会自动继续，无需再次点击。';
+    const frame=node('iframe');
+    frame.src='/static/coupon-captcha.html'+(challenge?'?'+new URLSearchParams(challenge):'');
+    frame.title=paymentOrder?'支付宝支付前的官方验证':'中国移动官方验证';
+    $('coupons-use-captcha').replaceChildren(frame);
+  }
+
   function showUseSuccess(message){
     useConfirming=false;useSubmitted=true;closeUse();
     const toast=$('coupons-toast');
@@ -353,6 +366,7 @@
       $('coupons-use-charge').value=best?.value||'';
       $('coupons-use-best').textContent=best?.label||'暂无可用充值方案';
       $('coupons-use-message').textContent=prepared.message||'核对后点击确认才会提交用券。';$('coupons-use-message').hidden=false;
+      if(prepared.state==='verification_required'&&prepared.verification==='captcha')showCaptcha(prepared.challenge);
     }catch(error){
       if(generation!==useGeneration)return;
       if(loginRequiredCodes.includes(error.code)){requireSharedLogin('prepare');return;}
@@ -380,10 +394,11 @@
   });
 
   $('coupons-use-form').addEventListener('submit',async event=>{
-    event.preventDefault();if(relogin?.required||!useOperation||useBusy||useSubmitted)return;
+    event.preventDefault();if(relogin?.required||!useOperation||useBusy||useSubmitted||captchaRequired&&!captchaToken)return;
     const generation=useGeneration;useBusy=true;useConfirming=true;useSubmitted=true;$('coupons-use-error').hidden=true;renderUseControls();
     try{
       const payload={operation_id:useOperation.operation_id,sms_code:$('coupons-use-code').value.trim(),charge_amount:$('coupons-use-charge').value,captcha_token:captchaToken};
+      captchaToken='';
       if(['exchange','rights','flow'].includes(useOperation.kind)){
         const verified=await api('/api/coupons/use/confirm',{...payload,prepare_risk:true});
         if(generation!==useGeneration)return;
@@ -405,11 +420,7 @@
       }
       captchaToken='';
       if(result.state==='verification_required'&&result.verification==='captcha'){
-        useSubmitted=false;captchaRequired=true;
-        $('coupons-use-verification').hidden=false;
-        $('coupons-use-verification').querySelector('p').textContent='完成验证后会自动继续，无需再次点击。';
-        const frame=node('iframe');frame.src='/static/coupon-captcha.html';frame.title='中国移动官方滑块验证';
-        $('coupons-use-captcha').replaceChildren(frame);
+        showCaptcha(result.challenge);
       }else{$('coupons-use-verification').hidden=true;$('coupons-use-captcha').replaceChildren();}
       const labels={accepted:'已受理',payment_required:'等待付款',unknown:'结果待核实'};
       $('coupons-use-message').textContent=(labels[result.state]?labels[result.state]+' · ':'')+result.message+(result.order_id?' 订单号：'+result.order_id:'');$('coupons-use-message').hidden=false;
@@ -421,6 +432,23 @@
     }catch(error){
       if(generation!==useGeneration)return;
       if(loginRequiredCodes.includes(error.code)){useConfirming=false;useSubmitted=false;requireSharedLogin('prepare');return;}
+      if(['OPERATION_MISSING','OPERATION_EXPIRED'].includes(error.code)){
+        useOperation=null;useSubmitted=false;useConfirming=false;
+        captchaRequired=false;captchaToken='';exchangeRiskToken='';
+        $('coupons-use-code').value='';$('coupons-use-sms').textContent='获取验证码';
+        $('coupons-use-verification').hidden=true;$('coupons-use-captcha').replaceChildren();
+        useRecheck={expired:true};
+        $('coupons-use-message').textContent='原用券会话已结束，请重新准备并核对当前方案后再确认。';
+        $('coupons-use-message').hidden=false;
+        $('coupons-use-error').textContent=error.message;$('coupons-use-error').hidden=false;
+        return;
+      }
+      if(error.code==='CAPTCHA_REQUIRED'){
+        showCaptcha();
+        $('coupons-use-message').textContent='正在等待中国移动官方验证，通过后会自动继续。';
+        $('coupons-use-message').hidden=false;
+        return;
+      }
       if(['SMS_REQUIRED','510002','510003','INVALID_AMOUNT','CAPTCHA_REQUIRED','RISK_INITIALIZATION_FAILED'].includes(error.code))useSubmitted=false;
       $('coupons-use-error').textContent=error.status||error.code==='RISK_INITIALIZATION_FAILED'?error.message:'提交结果待核实，请先在中国移动 APP 中查看，本页不会自动重试。';$('coupons-use-error').hidden=false;
     }finally{if(generation===useGeneration){useBusy=false;useConfirming=false;renderUseControls();}}
@@ -440,11 +468,7 @@
       if(generation!==useGeneration)return;
       captchaToken='';
       if(result.state==='verification_required'){
-        captchaRequired=true;$('coupons-use-verification').hidden=false;
-        $('coupons-use-verification').querySelector('p').textContent='完成验证后会自动获取付款链接，无需再次点击。';
-        const frame=node('iframe');frame.title='支付宝支付前的官方滑块验证';
-        frame.src='/static/coupon-captcha.html?'+new URLSearchParams(result.challenge);
-        $('coupons-use-captcha').replaceChildren(frame);
+        showCaptcha(result.challenge);
         $('coupons-use-message').textContent=result.message;
         $('coupons-use-get-payment').textContent='验证后继续获取支付链接';
         return;
