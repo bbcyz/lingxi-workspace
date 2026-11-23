@@ -73,6 +73,19 @@ class CashierH5Tests(unittest.TestCase):
         self.session = Session()
         self.client = CouponCashierH5(lambda: deepcopy(self.snapshot), session_factory=lambda: self.session)
 
+    def test_plain_gateway_session_expiry_is_an_explicit_rejection(self):
+        self.session.post=lambda *args,**kwargs:SimpleNamespace(status_code=200,json=lambda:{
+            'returnCode':'401','returnMessage':'private upstream user info expired','data':{},'ok':False})
+        with self.assertRaises(CouponCashierError)as failed:self.client.inspect_order(ORDER,'30')
+        self.assertEqual(failed.exception.code,'CASHIER_REJECTED')
+        self.assertEqual(failed.exception.safe['returnCode'],'401')
+        self.assertNotIn('private upstream',str(failed.exception));self.assertTrue(self.session.closed)
+
+    def test_plain_success_does_not_substitute_for_encrypted_order_data(self):
+        self.session.post=lambda *args,**kwargs:SimpleNamespace(status_code=200,json=lambda:{'returnCode':'0','data':{'status':'17'}})
+        with self.assertRaises(CouponCashierError)as failed:self.client.inspect_order(ORDER,'30')
+        self.assertEqual(failed.exception.code,'CASHIER_FORMAT')
+
     def test_inspect_only_authenticates_and_reads_the_existing_order(self):
         with patch('coupon_cashier_h5.datetime') as now:
             now.now.return_value = datetime(2026, 10, 30)

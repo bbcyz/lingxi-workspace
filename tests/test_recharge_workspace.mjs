@@ -16,7 +16,7 @@ class Element {
 }
 function find(node,text){if(node.textContent===text)return node;for(const child of node.children||[]){const found=find(child,text);if(found)return found;}return null;}
 async function fixture({running=false,checkin,serverTime='2026-10-26T10:00:00+08:00'}={}){
-  const elements=new Map(),calls=[],listeners={},get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const elements=new Map(),calls=[],listeners={},copied=[],get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   const filters=['all','scheduled','running','attention','ended'].map(v=>{const b=new Element('button');b.dataset.wedFilter=v;return b;});
   const pool=[{id:'a',name:'主号',phone_masked:'138****0001',status:'active'},{id:'b',name:'备用',phone_masked:'138****0002',status:'active'},{id:'c',name:'待登录',phone_masked:'138****0003',status:'login_required'}];
   const accounts=pool.map(a=>({id:'activity-'+a.id,login_id:a.id,name:a.name,phone:a.phone_masked,authenticated:false,activity:{}}));
@@ -37,15 +37,16 @@ async function fixture({running=false,checkin,serverTime='2026-10-26T10:00:00+08
       result=record.progress||{action:'sign',message:'今日待打卡'};
     }
     else if(path==='/recharge/api/login/attach')result={account_id:'activity-'+body.login_id};
+    else if(path==='/recharge/api/checkin/invite')result={invite_url:'https://h.app.coc.10086.cn/activity/zx/transit/transferDownload.html?targetUrl=fixture',invite_command:'官方示例口令'};
     else if(path.startsWith('/recharge/api/prizes?'))result={prizes:[{prizeName:'fixture',sendStatus:'UNUSED'}]};
     else if(path==='/recharge/api/schedules/cancel'){for(const id of body.account_ids)jobs[id]={...jobs[id],skip_week:'2026-10-28',next_run_at:'2026-11-04T08:00:00+08:00'};result={message:'已停止'};}
     else throw new Error('Unexpected request '+path);
     return {ok:true,json:async()=>structuredClone(result)};
   };
   const source=fs.readFileSync(new URL('../recharge/static/workspace.js',import.meta.url),'utf8').replace(/^import \* as M from .+;\r?\n/,'');
-  vm.runInNewContext(source,{M,document:{getElementById:get,createElement:tag=>new Element(tag),documentElement:{dataset:{apiBase:'/recharge'}},querySelector:()=>({content:'fixture-csrf'}),querySelectorAll:selector=>selector==='[data-wed-filter]'?filters:[],hidden:false},window:{addEventListener:(n,fn)=>listeners[n]=fn},fetch,URL,URLSearchParams,Intl,Date,location:{href:url,search:''},history:{replaceState(_state,_title,next){url=String(next);}},setInterval(){}});
+  vm.runInNewContext(source,{M,document:{getElementById:get,createElement:tag=>new Element(tag),documentElement:{dataset:{apiBase:'/recharge'}},querySelector:()=>({content:'fixture-csrf'}),querySelectorAll:selector=>selector==='[data-wed-filter]'?filters:[],hidden:false},window:{addEventListener:(n,fn)=>listeners[n]=fn},navigator:{clipboard:{writeText:async text=>copied.push(text)}},fetch,URL,URLSearchParams,Intl,Date,location:{href:url,search:''},history:{replaceState(_state,_title,next){url=String(next);}},setInterval(){}});
   await new Promise(resolve=>setImmediate(resolve));
-  return {get,calls,filters,accounts,jobs,url:()=>url};
+  return {get,calls,filters,accounts,jobs,copied,url:()=>url};
 }
 
 test('opening Wednesday uses automatic backend tasks and never creates a manual schedule',async()=>{
@@ -166,6 +167,26 @@ test('the toolbar sign-in follows the selected account',async()=>{
   await new Promise(resolve=>setImmediate(resolve));
   await get('wed-checkin-sign').click();
   assert.deepEqual(calls.filter(call=>call.body?.submit).map(call=>call.body),[{login_id:'a',submit:true}]);
+});
+
+test('only an account waiting for today’s assistance can copy its link and command',async()=>{
+  const {get,calls,copied}=await fixture({checkin:{settings:{enabled:true,time:'00:01'},active:[],records:{
+    a:{progress:{date:'2026-10-26',month:'2026-10',action:'manual',task_id:'yqyh',status:'待邀请'}},
+    b:{progress:{date:'2026-10-26',month:'2026-10',action:'manual',task_id:'czhf',status:'待充值'}},
+  }}});
+  const rows=get('wed-checkin-rows').children;
+  const invite=find(rows[0],'获取邀请链接');
+  assert.ok(invite);
+  assert.equal(find(rows[1],'获取邀请链接'),null);
+  await invite.click();
+  assert.equal(get('wed-checkin-invite').open,true);
+  assert.equal(get('wed-checkin-invite-account').textContent,'138****0001');
+  const url=get('wed-checkin-invite-url').value;
+  assert.match(url,/^https:\/\/h\.app\.coc\.10086\.cn\//);
+  await get('wed-checkin-invite-copy').click();
+  await get('wed-checkin-command-copy').click();
+  assert.deepEqual(copied,[url,'官方示例口令']);
+  assert.deepEqual(calls.filter(call=>call.body),[{path:'/recharge/api/checkin/invite',body:{login_id:'a'}}]);
 });
 
 test('only today’s check-in failure shows the daily retry limit',async()=>{

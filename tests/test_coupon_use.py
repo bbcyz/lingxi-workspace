@@ -16,6 +16,7 @@ from curl_cffi import requests
 
 from coupon_client import CouponClient, CouponError, GCM_KEY, _cbc_decrypt, _cbc_encrypt, _item
 from coupon_use import CouponUseError, CouponUseManager, PAYMENT_WINDOW_SECONDS
+from http_transport import CurlHttpVersion
 
 
 PHONE = '13800000000'
@@ -73,6 +74,7 @@ class Environment:
         self.snapshot, self.row = deepcopy(SNAPSHOT), deepcopy(ROW)
         self.rule = {'operateId': 'official-operation', 'saleType': '7', 'saleCode': '30~1000:6'}
         self.amount_rule = {'minAmount': '10', 'maxAmount': '1000'}
+        self.pay_rules = None
         self.sms_response = {'serialNo': 'private-sms-serial', 'md5': 'private-sms-md5'}
         self.wallet_init = {'msgId': base64.b64encode(_cbc_encrypt('fixture-message-id').encode()).decode()}
         self.detail = {'smsCheck': '1', 'activityId': 'private-detail-activity'}
@@ -161,7 +163,8 @@ class Session:
         if '/ruleinfo/' in url:
             return Response(encoded(self.env.rule))
         if '/payrule/' in url:
-            return Response(encoded({'amountRule': self.env.amount_rule}))
+            return Response(encoded(self.env.pay_rules if self.env.pay_rules is not None else
+                {'amountRule': self.env.amount_rule,'couponRules':[{**self.env.rule,'pcardNo':self.env.row['pCardNo']}]}))
         if '/initMessage?wel=' in url:
             return Response(encoded({}))
         if '/initMessage?' in url:
@@ -978,6 +981,9 @@ class CouponUseTests(unittest.TestCase):
             self.confirm(preview['operation_id'], charge_amount=preview['choices'][0]['value'])
         self.assertEqual(error.exception.code, 'RULE_CHANGED')
         self.assertEqual(self.env.final_calls, [])
+        self.assertIsNone(self.manager.operations[preview['operation_id']].context)
+        fresh=self.prepare()
+        self.assertNotEqual(fresh['operation_id'],preview['operation_id'])
 
     def test_special_reduction_preserves_official_amount_and_separate_net_fields(self):
         self.env.recharge()
@@ -1115,6 +1121,7 @@ class CouponUseTests(unittest.TestCase):
         encrypted_phone = base64.b64encode(_cbc_encrypt(PHONE).encode()).decode()
         self.assertTrue(final[0].endswith('/saveorderh5/'+encrypted_phone))
         self.assertIn('inParam', final[2])
+        self.assertEqual(final[3]['http_version'],CurlHttpVersion.V1_1)
         text = base64.b64decode(final[1]['param']).decode()
         body = json.loads(text)
         self.assertEqual((body['amount'], body['chargeMoney'], body['choseMoney']), (30, '36.00', '30'))
@@ -1157,7 +1164,146 @@ class CouponUseTests(unittest.TestCase):
         self.assertEqual(self.confirm(preview['operation_id'], charge_amount='30')['state'], 'unknown')
         self.assertEqual(len(self.env.final_calls), 1)
 
-    def test_official_captcha_challenge_resumes_same_session_only_after_user_token(self):
+    def test_recharge_prepares_official_device_cookie_before_order_without_a_captcha_value(self):
+        from coupon_recharge_device import SERVER
+        self.env.recharge()
+        preview=self.prepare()
+        self.assertEqual(self.env.sdk_calls,[])
+        self.manager.operations[preview['operation_id']].client.headers['User-Agent']='authorized-business-agent-fixture'
+        observed={}
+        def entering_order():
+            client=self.manager.operations[preview['operation_id']].client
+            cookie=next(c for c in client.cookies.jar if c.name=='stc-rrt-token')
+            observed.update(token=cookie.value,host_only=not cookie.domain_specified,
+                path=cookie.path,secure=cookie.secure,ua=client.headers['User-Agent'])
+        self.env.before_final=entering_order
+        result=self.confirm(preview['operation_id'],charge_amount='30')
+        self.assertEqual(result['state'],'payment_required')
+        self.assertTrue(result['device_preparation']['prepared'])
+        self.assertEqual(len(self.env.sdk_calls),1)
+        self.assertEqual(self.env.sdk_calls[0][1],SERVER)
+        self.assertEqual(observed['token'],self.env.sdk_token)
+        self.assertTrue(observed['host_only']);self.assertTrue(observed['secure'])
+        self.assertEqual(observed['path'],'/i')
+        self.assertEqual(observed['ua'],'authorized-business-agent-fixture')
+        self.assertIn('Python/',self.env.sdk_calls[0][2]['User-Agent'])
+        business=json.loads(base64.b64decode(self.env.final_calls[0][1]['param']))
+        self.assertIsNone(business['fkToken'])
+        self.assertNotIn(self.env.sdk_token,json.dumps(result))
+        pending=self.prepare()
+        self.assertEqual(pending['state'],'payment_required')
+        self.assertEqual(len(self.env.sdk_calls),1)
+        self.assertEqual(len(self.env.final_calls),1)
+
+    def test_native_device_path_keeps_the_same_operation_and_never_invents_a_captcha_token(self):
+        from coupon_native_device import NativeRechargeDevices
+        self.env.recharge()
+        self.env.snapshot['app_context']={'device_id':'registered-fixture-device'}
+        native=NativeRechargeDevices(self.env.provider,self.storage)
+        self.manager.recharge_devices=native
+        preview=self.prepare();operation=self.manager.operations[preview['operation_id']]
+        observed={}
+        def entering_order():
+            observed['cookie']=next(c.value for c in operation.client.cookies.jar if c.name=='stc-rrt-token')
+        self.env.before_final=entering_order
+        with patch.object(native,'_request',return_value='accepted-native-ticket-fixture')as request:
+            result=self.confirm(preview['operation_id'],charge_amount='30')
+            request.assert_called_once_with(LOGIN,operation.client)
+        self.assertEqual((result['state'],result['device_preparation']['provider']),('payment_required','m1'))
+        self.assertEqual(observed['cookie'],'accepted-native-ticket-fixture')
+        body=json.loads(base64.b64decode(self.env.final_calls[0][1]['param']))
+        self.assertIsNone(body['fkToken'])
+        self.assertEqual(len(self.env.final_calls),1)
+        self.assertEqual(self.prepare()['state'],'payment_required')
+        self.assertEqual(len(self.env.final_calls),1)
+
+    def test_recharge_automatically_uses_a_fresh_complete_sdk_callback_once(self):
+        self.env.recharge();preview=self.prepare();callback='S'*53+':'+'D'*40
+        solver=Mock();solver.solve.return_value=callback;self.manager.recharge_captcha=solver
+        result=self.confirm(preview['operation_id'],charge_amount='30')
+        self.assertEqual(result['state'],'payment_required');solver.solve.assert_called_once()
+        self.assertEqual(len(self.env.final_calls),1)
+        first=json.loads(base64.b64decode(self.env.final_calls[0][1]['param']))
+        self.assertEqual(first['fkToken'],callback)
+        self.assertNotIn(callback,json.dumps(self.storage.data))
+        self.assertEqual(self.confirm(preview['operation_id'],charge_amount='30'),result)
+        self.assertEqual(len(self.env.final_calls),1);solver.solve.assert_called_once()
+
+    def test_automatic_verification_rejection_closes_without_another_order_or_login(self):
+        from coupon_native_captcha import RechargeCaptchaError
+        self.env.recharge();preview=self.prepare();self.env.final_response={'retCode':'531027'}
+        solver=Mock();solver.solve.side_effect=RechargeCaptchaError('官方请求频繁','CAPTCHA_RATE_LIMITED',remote_code=429)
+        self.manager.recharge_captcha=solver
+        result=self.confirm(preview['operation_id'],charge_amount='30')
+        self.assertEqual((result['state'],result['code']),('failed','CAPTCHA_RATE_LIMITED'))
+        self.assertFalse(self.manager.busy_login(LOGIN));self.assertTrue(self.env.sessions[0].closed)
+        self.assertEqual(self.confirm(preview['operation_id'],charge_amount='30'),result)
+        self.assertEqual(len(self.env.final_calls),0);solver.solve.assert_called_once()
+
+    def test_recharge_matches_current_coupon_rule_and_sends_its_exact_id_type_with_first_proof(self):
+        self.env.recharge();self.env.rule['operateId']=69387
+        self.env.pay_rules={'amountRule':self.env.amount_rule,'couponRules':[
+            {'pcardNo':'unrelated-coupon','operateId':'other-id','saleType':7,'saleCode':'30~1000:9'},
+            {'pcardNo':self.env.row['pCardNo'],'operateId':'69387','saleType':7,'saleCode':'20~1000:2','pcardType':'hf0001'}]}
+        preview=self.prepare();self.assertEqual(preview['choices'][0]['value'],'20')
+        solver=Mock();solver.solve.return_value='fresh-server-proof:current-device';self.manager.recharge_captcha=solver
+        result=self.confirm(preview['operation_id'],charge_amount='20')
+        self.assertEqual(result['state'],'payment_required')
+        body=json.loads(base64.b64decode(self.env.final_calls[0][1]['param']))
+        self.assertEqual((body['operateId'],body['amount'],body['chargeMoney'],body['fkToken']),
+            ('69387',20,'22.00','fresh-server-proof:current-device'))
+        self.assertFalse(any('/ruleinfo/'in c[0]for c in self.env.calls))
+        self.assertEqual(sum('/payrule/'in c[0]for c in self.env.calls),2)
+        self.assertEqual(len(self.env.final_calls),1)
+
+    def test_recharge_cannot_use_another_coupons_current_rule(self):
+        self.env.recharge();self.env.pay_rules={'amountRule':self.env.amount_rule,'couponRules':[
+            {**self.env.rule,'pcardNo':'another-account-coupon'}]}
+        with self.assertRaises(CouponUseError)as failed:self.prepare()
+        self.assertEqual(failed.exception.code,'RULE_MISSING');self.assertEqual(self.env.final_calls,[])
+
+    def test_changed_amount_limits_stop_before_proof_is_consumed(self):
+        self.env.recharge();preview=self.prepare()
+        solver=Mock();self.manager.recharge_captcha=solver
+        self.env.amount_rule['maxAmount']='20'
+        with self.assertRaises(CouponUseError)as failed:self.confirm(preview['operation_id'],charge_amount='30')
+        self.assertEqual(failed.exception.code,'RULE_CHANGED');solver.solve.assert_not_called()
+        self.assertEqual(self.env.final_calls,[])
+
+    def test_official_challenge_rejection_after_automatic_proof_is_final_without_replay(self):
+        self.env.recharge();preview=self.prepare();self.env.final_response={'retCode':'531027'}
+        solver=Mock();solver.solve.return_value='fresh-server-proof:current-device';self.manager.recharge_captcha=solver
+        result=self.confirm(preview['operation_id'],charge_amount='30')
+        self.assertEqual((result['state'],result['code']),('failed','531027'))
+        self.assertEqual(self.confirm(preview['operation_id'],charge_amount='30'),result)
+        self.assertEqual(len(self.env.final_calls),1);solver.solve.assert_called_once()
+
+    def test_recharge_device_failure_preserves_official_captcha_fallback_without_repeating_device_setup(self):
+        self.env.recharge();self.env.sdk_status=-3
+        preview=self.prepare()
+        self.env.final_response={'retCode':'531027'}
+        result=self.confirm(preview['operation_id'],charge_amount='30')
+        self.assertEqual(result['state'],'verification_required')
+        self.assertFalse(result['device_preparation']['prepared'])
+        self.assertIsNone(self.env.sessions[0].cookies.get('stc-rrt-token'))
+        self.env.final_response=None
+        paid=self.confirm(preview['operation_id'],charge_amount='30',captcha_token='actual-official-token-fixture')
+        self.assertEqual(paid['state'],'payment_required')
+        self.assertEqual(len(self.env.sdk_calls),1)
+        self.assertEqual(len(self.env.final_calls),2)
+
+    def test_recharge_device_rate_limit_stops_before_any_order_intent(self):
+        self.env.recharge();self.env.sdk_status=-800
+        preview=self.prepare()
+        with self.assertRaises(CouponUseError)as failed:
+            self.confirm(preview['operation_id'],charge_amount='30')
+        self.assertEqual(failed.exception.code,'RISK_RATE_LIMITED')
+        self.assertEqual(failed.exception.status,429)
+        self.assertEqual(self.env.final_calls,[])
+        self.assertEqual(self.storage.data,{})
+        self.assertTrue(self.env.sessions[0].closed)
+
+    def test_official_captcha_challenge_resumes_same_session_only_after_official_token(self):
         self.env.recharge()
         preview = self.prepare()
         operation_id = preview['operation_id']
@@ -1169,9 +1315,12 @@ class CouponUseTests(unittest.TestCase):
         self.assertIsNone(self.manager.operations[operation_id].result)
         self.assertEqual(next(iter(self.storage.data.values()))['state'], 'failed')
         calls_before_retry = len(self.env.calls)
-        with self.assertRaises(CouponUseError) as error:
-            self.confirm(operation_id, charge_amount='30')
-        self.assertEqual(error.exception.code, 'CAPTCHA_REQUIRED')
+        repeated=self.confirm(operation_id,charge_amount='30')
+        self.assertEqual(repeated['state'],'verification_required')
+        restored=self.prepare()
+        self.assertEqual(restored['operation_id'],operation_id)
+        self.assertEqual(restored['state'],'verification_required')
+        self.assertEqual(restored['verification'],'captcha')
         self.assertEqual(len(self.env.calls), calls_before_retry)
 
         token = 'private-user-completed-official-captcha-token'
@@ -1192,19 +1341,37 @@ class CouponUseTests(unittest.TestCase):
         self.assertEqual(resumed['order']['order_id'], paid['order_id'])
         self.assertEqual(len(self.env.final_calls), 2)
 
+    def test_recharge_rejection_preserves_official_reason_without_echoing_its_proof_or_identity(self):
+        self.env.recharge();preview=self.prepare();token='S'*53+':'+'D'*40
+        self.env.final_response={'retCode':'537023','retMsg':'图形校验暂未完成 '+PHONE+' '+token+' private_app_uid private-recharge-code'}
+        result=self.confirm(preview['operation_id'],charge_amount='30',captcha_token=token)
+        self.assertEqual(result['code'],'537023');self.assertIn('图形校验暂未完成',result['message'])
+        for secret in (PHONE,token,'S'*53,'D'*40,'private_app_uid','private-recharge-code'):
+            self.assertNotIn(secret,result['message'])
+        self.assertEqual(len(self.env.final_calls),1)
+
     def test_environment_rejection_is_explicit_and_does_not_offer_payment_or_auto_retry(self):
         self.env.recharge()
+        cache=Mock();recover=Mock()
+        self.manager.credential_cache=cache
+        self.manager.app_session_recover=recover
         preview = self.prepare()
-        self.env.final_response = {'retCode': '531022'}
+        self.env.final_response = {'retCode': '531022','retMsg':'当前充值身份未通过 '+PHONE+' private_app_uid private-recharge-code'}
         result = self.confirm(preview['operation_id'], charge_amount='30')
         self.assertEqual((result['state'], result['code']), ('failed', '531022'))
         self.assertIn('充值环境异常', result['message'])
+        self.assertIn('重新登录',result['message'])
+        self.assertIn('当前充值身份未通过',result['message'])
+        for secret in (PHONE,'private_app_uid','private-recharge-code'):
+            self.assertNotIn(secret,result['message'])
         self.assertNotIn('order_id', result)
         self.assertNotIn('payment_url', result)
         self.assertTrue(self.env.sessions[0].closed)
         self.assertEqual(self.confirm(preview['operation_id'], charge_amount='30'), result)
         self.assertEqual(len(self.env.final_calls), 1)
         self.assertFalse(self.manager.busy_login(LOGIN))
+        cache.invalidate.assert_not_called()
+        recover.assert_not_called()
 
         self.env.snapshot['credential_revision'] += 1
         self.env.final_response = None
@@ -1213,6 +1380,36 @@ class CouponUseTests(unittest.TestCase):
         self.assertEqual(len(self.env.final_calls), 1, 'Preparing after login does not submit an order')
         self.assertEqual(self.confirm(fresh['operation_id'], charge_amount='30')['state'], 'payment_required')
         self.assertEqual(len(self.env.final_calls), 2)
+
+    def test_next_confirmation_can_complete_a_previously_rejected_native_client_context(self):
+        from types import SimpleNamespace
+        self.env.recharge()
+        meta={'prepared':True,'reused':True,'provider':'m1','expires_at':10000}
+        devices=SimpleNamespace(prepare=Mock(return_value=meta),complete_registered_client=Mock(return_value=meta))
+        self.manager.recharge_devices=devices
+        first=self.prepare();self.env.final_response={'retCode':'531022'}
+        self.assertEqual(self.confirm(first['operation_id'],charge_amount='30')['state'],'failed')
+        devices.complete_registered_client.assert_not_called()
+        second=self.prepare();self.env.final_response=None
+        result=self.confirm(second['operation_id'],charge_amount='30')
+        self.assertEqual(result['state'],'payment_required')
+        devices.prepare.assert_called_once();devices.complete_registered_client.assert_called_once_with(LOGIN,self.env.sessions[-1])
+        self.assertEqual(self.confirm(second['operation_id'],charge_amount='30'),result)
+        self.assertEqual(len(self.env.final_calls),2)
+
+    def test_failed_native_context_completion_does_not_consume_a_new_proof_or_submit(self):
+        from types import SimpleNamespace
+        from coupon_recharge_device import RechargeDeviceError
+        self.env.recharge();meta={'prepared':True,'reused':True,'provider':'m1','expires_at':10000}
+        devices=SimpleNamespace(prepare=Mock(return_value=meta),complete_registered_client=Mock())
+        self.manager.recharge_devices=devices
+        first=self.prepare();self.env.final_response={'retCode':'531022'}
+        self.confirm(first['operation_id'],charge_amount='30')
+        second=self.prepare();devices.complete_registered_client.side_effect=RechargeDeviceError('连接失败','RISK_NETWORK_FAILED')
+        solver=Mock();self.manager.recharge_captcha=solver
+        with self.assertRaises(CouponUseError)as failed:self.confirm(second['operation_id'],charge_amount='30')
+        self.assertEqual(failed.exception.code,'RISK_NETWORK_FAILED');solver.solve.assert_not_called()
+        self.assertEqual(len(self.env.final_calls),1);self.assertFalse(self.manager.busy_login(LOGIN))
 
     def test_only_explicit_captcha_codes_keep_session_open_for_another_user_confirmation(self):
         self.env.recharge()
@@ -1266,6 +1463,42 @@ class CouponUseTests(unittest.TestCase):
         self.assertEqual(device, {'sb': 'Xiaomi', 'sn': '2210132C', 'osType': 'android',
             'packageName': 'com.greenpoint.android.mc10086.activity', 'imei': 'fake-imei',
             'loginProvince': '851', 'loginCity': '0851'})
+
+    def test_recharge_reuses_registered_app_client_with_account_profile(self):
+        self.env.recharge()
+        self.env.snapshot['app_context'] = {'device_id': 'existing-login-device'}
+        self.env.snapshot['profile'] = {'provinceCode': '851', 'cityCode': '0851'}
+        preview = self.prepare()
+        init = next(call for call in self.env.calls if '/initMessage?wel=' in call[0])
+        device = json.loads(_cbc_decrypt(init[1]['data']))['deviceInfo']
+        self.assertEqual(device, {'sb': 'Xiaomi', 'sn': '2210132C', 'osType': 'android',
+            'packageName': 'com.greenpoint.android.mc10086.activity', 'imei': '',
+            'loginProvince': '851', 'loginCity': '0851'})
+        self.assertEqual(self.env.snapshot['app_context'], {'device_id': 'existing-login-device'})
+        self.env.snapshot['profile']['imei']='later-profile-value'
+        self.confirm(preview['operation_id'],charge_amount='30')
+        business=json.loads(base64.b64decode(self.env.final_calls[0][1]['param']))
+        self.assertEqual(business['appImei'],device['imei'])
+
+    def test_recharge_preserves_device_fields_supplied_by_own_profile(self):
+        self.env.recharge()
+        self.env.snapshot['app_context'] = {'device_id': 'existing-login-device'}
+        own_device = {'sb': 'registered-brand', 'sn': 'registered-model', 'osType': 'registered-os',
+            'packageName': 'registered-package', 'imei': 'registered-imei',
+            'loginProvince': 'registered-province', 'loginCity': 'registered-city'}
+        self.env.snapshot['profile'] = {**own_device, 'provinceCode': '851', 'cityCode': '0851'}
+        self.prepare()
+        init = next(call for call in self.env.calls if '/initMessage?wel=' in call[0])
+        self.assertEqual(json.loads(_cbc_decrypt(init[1]['data']))['deviceInfo'], own_device)
+
+    def test_recharge_order_uses_own_bound_app_identity_and_entry_attribution(self):
+        self.env.recharge()
+        self.manager.wallet_entry = 'https://touch.10086.cn/i/recharge?channelId=P-fixture&yx=fixture-source'
+        preview = self.prepare()
+        self.env.snapshot['cookie'] = 'JSESSIONID=new-background-session; UID=private_app_uid'
+        self.confirm(preview['operation_id'], charge_amount='30')
+        business = json.loads(base64.b64decode(self.env.final_calls[0][1]['param']))
+        self.assertEqual((business['wtAc'], business['wtAcId']), ('P-fixture_fixture-source', 'private-session'))
 
     def test_wallet_imei_fallback_uses_existing_android_id_from_login_context(self):
         self.env.snapshot['profile'].pop('imei')
@@ -1335,6 +1568,7 @@ Object.assign(context, {
   _0x117320: false, _0x1c7c63: '-1', _0x50a83f: false, _0x578c9d: '',
   _0x5c8924: ['871'], _0x5dd1d1: '851', _0x2d93ff: 'not-selected', _0x381a34: null
 });
+Object.assign(context, {_0x1794a7: input.attribution.wtAc, _0x5248fd: input.attribution.wtAcId});
 context.$ = () => ({text: () => '37.00'});
 context._0x9ba9a5 = body => module.saveRechargeOrder({
   reqBody: body, userInfo: context.nativeUser, noEncrypt: true, success() {}, error() {}
@@ -1359,7 +1593,8 @@ process.stdout.write(JSON.stringify(captured));
                          '5d6999cba7e43525f8146fa765abb5054b62df4ab3e8bd0ba2b3c010abf80ca6')
         inputs.update(phone=PHONE, profile=self.env.snapshot['profile'], uid='private_app_uid',
                       operateId=self.env.rule['operateId'], couponCode=self.env.row['pCardNo'],
-                      captchaToken='fixture-official-token')
+                      captchaToken='fixture-official-token',
+                      attribution=self.manager.operations[preview['operation_id']].attribution)
         run = subprocess.run(['node', '-e', program], input=json.dumps(inputs, ensure_ascii=False),
                              capture_output=True, text=True, encoding='utf-8', timeout=5, check=True)
         official_init, official_order = json.loads(run.stdout)

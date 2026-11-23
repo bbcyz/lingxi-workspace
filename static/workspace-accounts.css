@@ -1,0 +1,84 @@
+.workspace-account-content { min-width: 0; }
+.workspace-account-index { display: none; }
+
+@media (min-width: 1100px) {
+  .workspace-app .workspace-account-layout,
+  .workspace-app .dashboard-panels {
+    display: grid;
+    grid-template-columns: clamp(230px, 18vw, 288px) minmax(0, 1fr);
+    align-items: start;
+    gap: 18px;
+  }
+
+  .workspace-app .dashboard-pool { grid-column: 1; grid-row: 1; }
+  .workspace-app .dashboard-task-panel { grid-column: 2; grid-row: 1; min-width: 0; }
+
+  .workspace-app .workspace-account-rail {
+    align-self: start;
+    min-width: 0;
+    margin-bottom: 0;
+    padding: 15px 16px;
+  }
+
+  .workspace-app .workspace-account-rail .workspace-account-list {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    max-height: clamp(240px, calc(100dvh - 245px), 740px);
+    padding-inline-end: 3px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+  }
+
+  .workspace-app .workspace-account-list > :is(button, .account-pill) {
+    min-width: 0;
+    margin: 0;
+    padding: 6px 10px;
+    overflow-wrap: anywhere;
+  }
+
+  .workspace-account-index {
+    display: block;
+    border: 1px solid var(--ws-line);
+    border-radius: 10px;
+    background: var(--ws-paper);
+  }
+
+  .workspace-account-index-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .workspace-account-index-heading h2 { margin: 0; font-size: 15px; }
+  .workspace-account-index-heading button { flex-shrink: 0; white-space: nowrap; }
+  .workspace-account-index-heading .count-chip { margin-inline-start: 4px; }
+  .workspace-account-index-empty { margin: 0; color: var(--ws-muted); font-size: 12px; }
+
+  .workspace-app button.workspace-account-jump {
+    display: grid;
+    gap: 2px;
+    border: 1px solid var(--ws-line);
+    border-radius: 6px;
+    background: var(--ws-paper);
+    color: var(--ws-ink);
+    text-align: start;
+    font-size: 12px;
+  }
+
+  .workspace-app button.workspace-account-jump:hover { background: var(--ws-blue-soft); }
+  .workspace-account-jump small { color: var(--ws-text); font-size: 11px; }
+  .workspace-app tr.workspace-account-target { scroll-margin-top: calc(var(--ws-topbar) + 16px); }
+  .workspace-app tr.workspace-account-target:focus { outline: 2px solid var(--ws-blue); outline-offset: -2px; }
+
+  .bills-shell .workspace-account-content { container-type: inline-size; }
+  @container (max-width: 720px) {
+    .bills-shell .information-columns {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: "usage" "bill" "services";
+    }
+  }
+}

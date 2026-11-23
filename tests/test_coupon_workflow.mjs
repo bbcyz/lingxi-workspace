@@ -51,7 +51,8 @@ async function fixture(mode,options={}) {
       if(options.prepareAuth&&!loggedIn){status=401;result={code:'APP_LOGIN_REQUIRED',error:'请重新登录'};}
       else if(options.usedHistory)result={state:'accepted',message:'官方历史已确认使用'};
       else if(options.unknownSubmission&&!body.retry)result={state:'unconfirmed',can_retry:true,message:'官方当前仍显示此券可用，请核实上次结果。'};
-      else result={operation_id:++prepareCount===1?'operation':'operation-'+prepareCount,kind:card.use_kind,choices:[{value:'30',label:'充值30元'}]};
+      else result={operation_id:++prepareCount===1?'operation':'operation-'+prepareCount,kind:card.use_kind,choices:[{value:'30',label:'充值30元'}],
+        ...(options.restoreCaptcha?{state:'verification_required',verification:'captcha',message:'正在等待官方验证'}:{})};
     }
     else if(url==='/api/coupons/use/confirm'||url==='/api/coupons/use/payment') {
       if(options.closedPayment&&url==='/api/coupons/use/payment')result={state:'closed',message:'订单付款窗口已结束'};
@@ -161,6 +162,75 @@ for(const mode of ['payment','submission'])test(`human verification automaticall
   assert.equal(env.get('coupons-payment-url').value,'https://mclient.alipay.com/cashierRoutePay.htm?fixture');
 });
 
+test('reopening an operation awaiting verification restores its component without submitting again',async()=>{
+  const env=await fixture('submission',{restoreCaptcha:true});
+  const frame=env.get('coupons-use-captcha').querySelector('iframe');
+  assert.ok(frame);
+  assert.equal(env.get('coupons-use-verification').hidden,false);
+  assert.equal(env.get('coupons-use-confirm').disabled,true);
+  assert.equal(env.calls.filter(call=>call.url==='/api/coupons/use/confirm').length,0);
+  env.events.message({source:frame.contentWindow,origin:'http://localhost:5500',
+    data:{type:'coupon-captcha-success',token:'official-server-approved-token'}});
+  await new Promise(resolve=>setImmediate(resolve));
+  const submitted=env.calls.filter(call=>call.url==='/api/coupons/use/confirm');
+  assert.equal(submitted.length,1);
+  assert.equal(submitted[0].body.operation_id,'operation');
+  assert.equal(submitted[0].body.captcha_token,'official-server-approved-token');
+});
+
+test('a legacy CAPTCHA_REQUIRED error restores verification instead of showing only an error',async()=>{
+  const options={errorCode:'CAPTCHA_REQUIRED'};
+  const env=await fixture('submission',options);
+  assert.equal(env.get('coupons-use-error').hidden,true);
+  assert.equal(env.get('coupons-use-verification').hidden,false);
+  assert.equal(env.get('coupons-use-confirm').disabled,true);
+  const frame=env.get('coupons-use-captcha').querySelector('iframe');
+  assert.ok(frame);
+  assert.equal(env.calls.filter(call=>call.url==='/api/coupons/use/confirm').length,1);
+  options.errorCode='';
+  const completed={source:frame.contentWindow,origin:'http://localhost:5500',
+    data:{type:'coupon-captcha-success',token:'fresh-official-token'}};
+  env.events.message(completed);env.events.message(completed);
+  await new Promise(resolve=>setImmediate(resolve));
+  const submitted=env.calls.filter(call=>call.url==='/api/coupons/use/confirm');
+  assert.equal(submitted.length,2);
+  assert.equal(submitted[1].body.operation_id,'operation');
+  assert.equal(submitted[1].body.captcha_token,'fresh-official-token');
+});
+
+test('a verification token is not reused after a correctable submission error',async()=>{
+  const options={restoreCaptcha:true};
+  const env=await fixture('submission',options);
+  const frame=env.get('coupons-use-captcha').querySelector('iframe');
+  options.errorCode='INVALID_AMOUNT';
+  env.events.message({source:frame.contentWindow,origin:'http://localhost:5500',
+    data:{type:'coupon-captcha-success',token:'one-use-official-token'}});
+  await new Promise(resolve=>setImmediate(resolve));
+  options.errorCode='';
+  await env.get('coupons-use-form').requestSubmit();
+  const submitted=env.calls.filter(call=>call.url==='/api/coupons/use/confirm');
+  assert.deepEqual(submitted.map(call=>call.body.captcha_token),['one-use-official-token','']);
+  assert.equal(env.get('coupons-use-verification').hidden,false);
+});
+
+for(const code of ['OPERATION_MISSING','OPERATION_EXPIRED'])test(`${code} offers a fresh preview without replaying the old submission`,async()=>{
+  const options={errorCode:code};
+  const env=await fixture('submission',options);
+  assert.equal(env.get('coupons-use-recheck').hidden,false);
+  assert.equal(env.get('coupons-use-recheck').textContent,'重新准备');
+  assert.equal(env.get('coupons-use-confirm').hidden,true);
+  assert.equal(env.get('coupons-use-captcha').children.length,0);
+  assert.match(env.get('coupons-use-message').textContent,/会话已结束/);
+  await env.get('coupons-use-form').requestSubmit();
+  assert.equal(env.calls.filter(call=>call.url==='/api/coupons/use/confirm').length,1);
+  options.errorCode='';
+  await env.get('coupons-use-recheck').click();
+  assert.equal(env.get('coupons-use-recheck').hidden,true);
+  assert.equal(env.get('coupons-use-confirm').hidden,false);
+  assert.deepEqual(env.calls.filter(call=>call.url==='/api/coupons/use/prepare').map(call=>call.body.coupon_id),['coupon','coupon']);
+  assert.equal(env.calls.filter(call=>call.url==='/api/coupons/use/confirm').length,1);
+});
+
 for(const code of ['ALIPAY_RELOGIN_REQUIRED','APP_LOGIN_REQUIRED','APP_SESSION_EXPIRED','COUPON_LOGIN_REQUIRED','500003'])test(`${code}: shared account login resumes original order`,async()=>{
   const env=await fixture('payment',{errorCode:code}),{get,calls}=env;
   assert.equal(get('coupons-use').open,true);
@@ -231,6 +301,17 @@ test('531022 recurring after login does not loop login SMS or automatically resu
   assert.match(get('coupons-relogin-message').textContent,/官方仍要求验证/);
   assert.deepEqual(env.reloginRequests,['account']);
   assert.equal(calls.filter(call=>call.url==='/api/coupons/use/confirm').length,2);
+});
+
+test('531022 in an HTTP error uses shared login without automatically resubmitting',async()=>{
+  const env=await fixture('submission',{errorCode:'531022'}),{get,calls}=env;
+  assert.equal(get('coupons-use-relogin').hidden,false);
+  assert.deepEqual(env.reloginRequests,['account']);
+  assert.equal(calls.filter(call=>call.url==='/api/coupons/use/confirm').length,1);
+  await env.completeLogin();
+  assert.equal(calls.filter(call=>call.url==='/api/coupons/use/prepare').length,2);
+  assert.equal(calls.filter(call=>call.url==='/api/coupons/use/confirm').length,1);
+  assert.equal(calls.some(call=>call.url.startsWith('/api/logins/')),false);
 });
 
 test('other rejected recharge results do not trigger login SMS',async()=>{
@@ -487,8 +568,8 @@ test('unknown previous submission is rechecked without replay and retry preparat
 test('coupon name labels combine strict recharge value with a 72-hour expiry window',async()=>{
   const now=Date.UTC(2026,10,9,8),day=86400000;
   const rows=[
-    {id:'both',name:'both',use_kind:'recharge',worth_recharging:true,expires_at:new Date(now+3*day).toISOString()},
-    {id:'worth',name:'worth',use_kind:'recharge',worth_recharging:true,expires_at:new Date(now+4*day).toISOString()},
+    {id:'both',name:'both',use_kind:'recharge',worth_recharging:true,recharge_discount:'9折',expires_at:new Date(now+3*day).toISOString()},
+    {id:'worth',name:'worth',use_kind:'recharge',worth_recharging:true,recharge_discount:'8.9折',expires_at:new Date(now+4*day).toISOString()},
     {id:'low-value',name:'low-value',use_kind:'recharge',worth_recharging:false,expires_at:new Date(now+day).toISOString()},
     {id:'unpriced',name:'unpriced',use_kind:'recharge',expires_at:new Date(now+day).toISOString()},
     {id:'boundary',name:'boundary',expires_at:new Date(now+3*day).toISOString()},
@@ -507,8 +588,8 @@ test('coupon name labels combine strict recharge value with a 72-hour expiry win
     const row=renderedRows.find(row=>descend(row).some(node=>node.className==='coupons-name'&&node.textContent===name));
     return descend(row).filter(node=>node.className?.startsWith('coupons-tag ')).map(node=>node.textContent);
   };
-  assert.deepEqual(tags('both'),['值得充','快过期']);
-  assert.deepEqual(tags('worth'),['值得充']);
+  assert.deepEqual(tags('both'),['9折','快过期']);
+  assert.deepEqual(tags('worth'),['8.9折']);
   assert.deepEqual(tags('low-value'),[]);
   assert.deepEqual(tags('unpriced'),[]);
   assert.deepEqual(tags('boundary'),['快过期']);

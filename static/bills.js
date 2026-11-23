@@ -4,6 +4,7 @@
   const accountStates = {active:'已登录',login_required:'需重新登录',restoring:'正在恢复',retry:'等待重连'};
   const loginRequiredCodes = new Set(['APP_LOGIN_REQUIRED','APP_SESSION_EXPIRED','BILL_LOGIN_REQUIRED','BILLS_LOGIN_REQUIRED','USAGE_LOGIN_REQUIRED','SERVICES_LOGIN_REQUIRED']);
   const moneyFields = ['total','payable','original','discount','rebate','balance'];
+  const flowOrder = ['国内通用流量','定向流量','国内其他流量','WLAN流量'];
   const formatter = new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
   let accounts = [], months = [], loginId = '', month = '', bill = null, errorMessage = '', errorCode = '';
   let usage = null, usageErrorMessage = '', usageErrorCode = '', informationErrorMessage = '';
@@ -35,7 +36,7 @@
     $('bills-account-count').textContent=accounts.length;
     $('bills-account-hint').textContent=accounts.length?'与其他功能共用登录':'请从左侧“账号管理”添加账号';
     $('bills-current-account').textContent=selected?`${selected.name||selected.phone_masked} · ${selected.phone_masked}`:'尚未选择账号';
-    $('usage-current-account').textContent=$('bills-current-account').textContent;
+    $('usage-current-account').textContent=selected?.phone_masked||'尚未选择账号';
     $('services-current-account').textContent=$('bills-current-account').textContent;
     $('bills-accounts').replaceChildren(...accounts.map(account=>{
       const button=node('button','bills-account'+(account.id===loginId?' selected':''));button.type='button';
@@ -92,32 +93,6 @@
       }
       return result;
     }
-    const overview=(usage?.overview||[]).map(item=>{
-      const type=['flow','voice','sms'].includes(item.key)?item.key:'other';
-      const card=node('article','usage-overview-card usage-'+type);
-      const heading=node('div','usage-overview-heading');heading.append(node('span','usage-type-mark',({flow:'流',voice:'话',sms:'信'})[type]||'余'),node('h3','',item.name));
-      const remaining=node('div','usage-remaining');remaining.append(node('span','usage-remaining-label','剩余'),quantity(item,'remaining'));
-      const values=node('div','usage-overview-values');
-      values.append(remaining,counters(item,'usage-overview-counters',[['total','总量'],['used','已用']]));
-      card.append(heading,values);
-      if(item.used_percent!==null&&item.used_percent!==undefined){
-        const meterRow=node('div','usage-meter-row'),meter=node('div','usage-meter');
-        meter.setAttribute('role','meter');meter.setAttribute('aria-label',`${item.name}已用比例`);
-        meter.setAttribute('aria-valuemin','0');meter.setAttribute('aria-valuemax','100');meter.setAttribute('aria-valuenow',item.used_percent);
-        const percent=String(Number(item.used_percent)),label=`已用 ${percent}%`;
-        meter.setAttribute('aria-valuetext',label);meter.setAttribute('title',label);
-        const fill=node('span','usage-meter-fill');fill.style.width=`${item.used_percent}%`;meter.append(fill);
-        meterRow.append(meter,node('span','usage-meter-percent',`${percent}%`));card.append(meterRow);
-      }
-      const meta=metadata(item,{scope:item.name});
-      if(meta.children.length){meta.className+=' usage-overview-meta';card.append(meta);}
-      return card;
-    });
-    if(!overview.length){
-      const message=usageLoading?'正在查询该账号套餐余量…':!selected?(refreshing?'正在读取共享账号…':'共享账号池为空，请从左侧“账号管理”登录。'):usageErrorMessage?'本次余量查询未完成，点击“刷新信息”重试。':usage?usage.message||'暂无套餐余量概览，可查看下方套餐明细。':'选择账号后查询套餐余量。';
-      overview.push(node('p','bills-empty',message));
-    }
-    $('usage-overview').replaceChildren(...overview);
     function detailItem(item,inherited={}){
       const detail=node('article','usage-item');
       const hasAmounts=entry=>entry.unlimited||['total','used','remaining'].some(field=>entry[field]!==null&&entry[field]!==undefined&&entry[field]!=='');
@@ -145,11 +120,20 @@
       }
       return detail;
     }
-    const groups=(usage?.groups||[]).map((group,index)=>{
-      const open=usageExpanded.has(index),card=node('section','usage-group'+(open?' expanded':'')),heading=node('button','usage-group-heading');heading.type='button';
+    function detailGroup(group,index,attached=false){
+      const open=usageExpanded.has(index);
+      const card=node('section','usage-group'+(attached?' usage-attached':'')+(open?' expanded':''));
+      const heading=node('button','usage-group-heading');heading.type='button';heading.id=`usage-detail-${index}`;
       heading.setAttribute('aria-expanded',String(open));heading.setAttribute('aria-label',`${open?'收起':'展开'}${group.name}`);
-      heading.append(node('span','',group.name),node('span','usage-group-count',`${group.items.length} 项`),node('span','usage-group-chevron',open?'−':'+'));
-      heading.addEventListener('click',()=>{if(usageExpanded.has(index))usageExpanded.delete(index);else usageExpanded.add(index);renderUsage();});card.append(heading);
+      heading.append(node('span','',attached?(open?'收起详细信息':'展开详细信息'):group.name));
+      if(!attached)heading.append(node('span','usage-group-count',`${group.items.length} 项`));
+      const mark=node('span','usage-group-chevron',attached?(open?'⌃':'⌄'):(open?'−':'+'));
+      mark.setAttribute('aria-hidden','true');heading.append(mark);
+      heading.addEventListener('click',()=>{
+        if(open)usageExpanded.delete(index);else usageExpanded.add(index);
+        renderUsage();$(heading.id).focus();
+      });
+      card.append(heading);
       if(open){
         const shared={},first=group.items[0];
         if(group.items.length>1){
@@ -164,9 +148,77 @@
         items.append(...group.items.map(item=>detailItem(item,shared)));card.append(items);
       }
       return card;
-    });
-    if(!groups.length)groups.push(node('p','usage-empty',usageLoading?'正在读取套餐明细…':usageErrorMessage?'套餐明细暂未获取。':usage?'官方暂未提供套餐明细。':'查询后查看套餐明细。'));
+    }
+    const allGroups=(usage?.groups||[]).filter(group=>group.name!=='其他资源');
+    const planIndex=allGroups.findIndex(group=>group.name==='套餐信息'&&group.items[0]?.name);
+    const plan=$('usage-plan');
+    plan.hidden=planIndex===-1;
+    plan.textContent=plan.hidden?'':allGroups[planIndex].items[0].name;
+    plan.onclick=plan.hidden?null:()=>{
+      usageExpanded.add(planIndex);renderUsage();$(`usage-detail-${planIndex}`).focus();
+    };
+    function rank(item){
+      if(item.key!=='flow')return flowOrder.length+1;
+      const index=flowOrder.indexOf(item.name);
+      return index===-1?flowOrder.length:index;
+    }
+    const overviewItems=[...(usage?.overview||[])].sort((a,b)=>rank(a)-rank(b));
+    const smsCount=overviewItems.filter(item=>item.key==='sms').length;
+    const attachedGroups=new Set();
+    const flowRow=node('div','usage-card-row'), otherRow=node('div','usage-card-row');
+    for(const item of overviewItems){
+      const exhausted=item.remaining_percent!=null&&item.remaining!=null&&Number(item.remaining)===0;
+      const card=node('article','usage-overview-card'+(exhausted?' usage-exhausted':''));
+      card.setAttribute('data-usage-kind',item.key);
+      card.append(node('h3','usage-overview-title',item.name));
+      const reading=node('div','usage-reading'),remaining=node('div','usage-remaining');
+      remaining.append(node('span','usage-remaining-label','可用余量'),quantity(item,'remaining'));
+      reading.append(remaining,counters(item,'usage-overview-counters',[['used','已用'],['total','总量']]));
+      const summary=node('div','usage-card-summary');summary.append(reading);card.append(summary);
+      if(item.remaining_percent!=null){
+        const percent=Number(item.remaining_percent);
+        const tiny=percent<1&&Number(item.remaining)>0;
+        const label=tiny?'剩余不足':Number.isInteger(percent)?'剩余':'剩余约';
+        const displayPercent=tiny?'1%':`${Math.floor(percent)}%`;
+        const meter=node('div','usage-meter');
+        meter.setAttribute('role','meter');meter.setAttribute('aria-label',`${item.name}剩余比例`);
+        meter.setAttribute('aria-valuemin','0');meter.setAttribute('aria-valuemax','100');meter.setAttribute('aria-valuenow',item.remaining_percent);
+        meter.setAttribute('aria-valuetext',`${label} ${displayPercent}`);
+        const overAllowance=Number(item.total)>0&&Number(item.used)>Number(item.total);
+        const usedPercent=item.used_percent??(overAllowance?100:null);
+        const sweep=(Number(usedPercent)*1.8).toFixed(3)+'deg';
+        const ring=node('span','usage-meter-ring');
+        ring.style.background=`conic-gradient(from 270deg, var(--usage-ring-fill) ${sweep}, var(--usage-track) 0 180deg, transparent 0)`;
+        ring.setAttribute('aria-hidden','true');
+        meter.append(ring);
+        if(usedPercent!==null){
+          const pointer=node('span','usage-meter-pointer');
+          pointer.style.transform=`rotate(${sweep})`;
+          pointer.setAttribute('aria-hidden','true');meter.append(pointer);
+        }
+        const readout=node('div','usage-meter-readout');
+        readout.append(node('span','',label+' '),node('strong','',displayPercent),node('span','usage-status',exhausted?'已用尽':'使用中'));
+        meter.append(readout);summary.append(meter);
+      }
+      const meta=metadata(item,{scope:item.name});
+      if(meta.children.length)card.append(meta);
+      const detailIndex=allGroups.findIndex((group,index)=>group.key===item.key&&!attachedGroups.has(index)&&
+        (group.name===item.name||(item.key==='sms'&&smsCount===1)));
+      if(detailIndex!==-1){
+        card.append(detailGroup(allGroups[detailIndex],detailIndex,true));attachedGroups.add(detailIndex);
+      }
+      (item.key==='flow'?flowRow:otherRow).append(card);
+    }
+    const overview=[flowRow,otherRow].filter(row=>row.children.length);
+    const groups=allGroups.flatMap((group,index)=>attachedGroups.has(index)?[]:[detailGroup(group,index)]);
+    if(!overview.length&&!groups.length){
+      const message=usageLoading?'正在查询该账号套餐余量…':!selected?(refreshing?'正在读取共享账号…':'共享账号池为空，请从左侧“账号管理”登录。'):usageErrorMessage?'本次余量查询未完成，点击“刷新信息”重试。':usage?usage.message||'官方暂未提供套餐余量。':'选择账号后查询套餐余量。';
+      overview.push(node('p','bills-empty',message));
+    }
+    $('usage-overview').replaceChildren(...overview);
+    $('usage-overview').hidden=!overview.length;
     $('usage-groups').replaceChildren(...groups);
+    $('usage-groups').hidden=!groups.length;
     const notes=usage?.notes||[];$('usage-notes-list').replaceChildren(...notes.map(note=>node('li','',note)));$('usage-notes').hidden=!notes.length;
     $('usage-sync').textContent=usageLoading?'正在查询官方套餐余量…':usage?.queried_at?'北京时间 · 最近查询 '+formatter.format(new Date(usage.queried_at)):usageErrorMessage?'查询未完成':refreshing?'正在读取共享账号…':'尚未查询套餐余量';
   }

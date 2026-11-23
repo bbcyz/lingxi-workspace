@@ -179,6 +179,15 @@ def create_app(client=None, *, manager=None, scheduler=None, app_login_provider=
         result=scheduler.daily.run(data['login_id'],submit=data.get('submit',False))
         return jsonify(result),400 if result.get('error') else 200
 
+    @app.post('/api/checkin/invite')
+    def checkin_invite():
+        if scheduler.daily is None:
+            raise ActivityError('连续打卡需使用共享账号。', 'SHARED_ACCOUNTS_REQUIRED', 409)
+        login_id = request.get_json().get('login_id')
+        if not isinstance(login_id, str) or not login_id:
+            raise ActivityError('请选择有效账号。', 'INVALID_REQUEST')
+        return jsonify(scheduler.daily.run(login_id, invite=True))
+
     @app.post('/api/login/attach')
     def attach_shared_login():
         data = request.get_json()

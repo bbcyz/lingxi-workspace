@@ -28,26 +28,9 @@
 .net-age-dialog-actions { margin-top:16px; }
 
 @media (min-width:1100px) {
-  .net-age-shell {
-    display:grid;
-    grid-template-columns:clamp(230px,18vw,288px) minmax(0,1fr);
-    column-gap:18px;
-    align-items:start;
-  }
-  .net-age-heading { grid-column:1/-1; }
-  .net-age-shell > .coupons-account-panel { margin-bottom:0; padding:15px 16px; }
   .net-age-shell .coupons-account-heading { gap:8px; margin-bottom:12px; }
   .net-age-shell .coupons-account-heading button { white-space:nowrap; }
-  .net-age-shell .coupons-accounts {
-    grid-template-columns:minmax(0,1fr);
-    gap:7px;
-    max-height:clamp(240px,calc(100dvh - 245px),740px);
-    padding-right:3px;
-    overflow-y:auto;
-    scrollbar-width:thin;
-    scrollbar-gutter:stable;
-  }
-  .workspace-app .net-age-shell button.coupons-account { padding:6px 10px; gap:2px; }
+  .workspace-app .net-age-shell button.coupons-account { gap:2px; }
 }
 
 @media (max-width:600px) {

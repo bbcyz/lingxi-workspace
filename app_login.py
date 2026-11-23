@@ -36,6 +36,13 @@ RESPONSE_KEY_14 = b"RYV0hCV1lV25KYVJ"
 IV_14 = b"VjFSQ1ZtVkQxRTlQ"
 APP_HOST = "https://client.app.coc.10086.cn"
 APP_IT_HOST = "https://clientaccess.10086.cn"
+APP_CLIENT_VERSION_NAME = '12.5.6'
+APP_CLIENT_VERSION_CODE = 125600
+APP_CLIENT_ANDROID_RELEASE = '16'
+APP_CLIENT_ANDROID_API = 36
+APP_CLIENT_APP_NAME = '中国移动'
+APP_CLIENT_LEGACY_SIGN_MD5 = 'e0bcb95cdaf4777715e4fa5989a4446c'
+APP_CLIENT_APK_BYTES = 230290259
 SEND_SMS_PATH = "/biz-orange/LN/uamrandcode/sendMsgLoginNew"
 LOGIN_PATH = "/biz-orange/LN/uamsmscode/login"
 INIT_PATH = "/biz-orange/DN/init/startInit"
@@ -186,10 +193,10 @@ class AppLoginSession:
         value = {
             "ak": "F4AA34B89513F0D087CA0EF11A3277469DC74905", "cid": client_id(self.device_id), "ctid": client_id(self.device_id),
             "city": str(self.user_info.get('cityCode') or '') if authenticated else '',
-            "prov": str(self.user_info.get('provinceCode') or '') if authenticated else '', "cv": "12.5.6", "en": "0",
+            "prov": str(self.user_info.get('provinceCode') or '') if authenticated else '', "cv": APP_CLIENT_VERSION_NAME, "en": "0",
             "imei": "", "nt": "3", "packageName": "com.greenpoint.android.mc10086.activity",
             "reqBody": body, "sb": "Xiaomi", "sn": "2210132C", "sp": "1080x2250",
-            "st": "1", "sv": "16", "t": md5(self.cookie) if self.cookie else "", "tel": self.phone if authenticated else '99999999999', "xc": "A2081", "xk": self.xk,
+            "st": "1", "sv": APP_CLIENT_ANDROID_RELEASE, "t": md5(self.cookie) if self.cookie else "", "tel": self.phone if authenticated else '99999999999', "xc": "A2081", "xk": self.xk,
         }
         if login_component:
             value.update(appKey="00000159", baseFrameVersion="0.0.1", componentID="BI2021SA000055", componentVersion="2.0.0")
@@ -230,11 +237,11 @@ class AppLoginSession:
         return {
             "ssk": client_id(self.device_id), "imei": "", "provinceCode": "", "cityCode": "",
             "channelCode": "A2081", "pkgName": "com.greenpoint.android.mc10086.activity",
-            "appName": "中国移动", "androidId": self.device_id[:16], "oaid": "",
+            "appName": APP_CLIENT_APP_NAME, "androidId": self.device_id[:16], "oaid": "",
             "supportAppStore": 1, "supportDeepLink": 1, "supportQuickApp": 1,
             "mac": "00:00:00:00:00:00", "deviceType": "1", "deviceWidth": "1080",
             "deviceHeight": "2400", "density": "440", "deviceId": "6694594664447",
-            "appVersion": "12.5.6", "cellNums": "99999999999", "cellNum": "99999999999",
+            "appVersion": APP_CLIENT_VERSION_NAME, "cellNums": "99999999999", "cellNum": "99999999999",
             "reqNumber": "1", "networkType": "3", "preloadNetworkType": "2", "recordFrequency": [],
         }
 

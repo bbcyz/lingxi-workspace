@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>我的卡券 · 本地工具台</title><link rel="icon" href="/favicon.ico">
   <link rel="stylesheet" href="/static/portal.css"><link rel="stylesheet" href="/static/workspace.css"><link rel="stylesheet" href="/static/coupons.css">
-  <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/static/coupons.js" defer></script>
+  <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/static/coupons.js?v=recharge-relogin-531022-20261123" defer></script>
   <link rel="stylesheet" href="/static/mobile.css?v=mobile-1">
   <script src="/static/mobile.js?v=mobile-1" defer></script>
   {% include 'theme_head.html' %}
@@ -15,10 +15,12 @@
     <div class="coupons-notices-heading"><strong>官方公告</strong><span id="coupons-notices-sync"></span></div>
     <div id="coupons-notices-list"></div><p id="coupons-notices-message" role="status" hidden></p>
   </aside>
-  <section class="coupons-account-panel" aria-label="选择卡券账号">
+  <div class="workspace-account-layout">
+  <section class="workspace-account-rail coupons-account-panel" aria-label="选择卡券账号">
     <div class="coupons-account-heading"><h2>共享账号 <span id="coupons-account-count">—</span></h2><span id="coupons-account-hint">正在读取账号…</span></div>
-    <div id="coupons-accounts" class="coupons-accounts" role="group" aria-label="卡券使用账号"></div>
+    <div id="coupons-accounts" class="coupons-accounts workspace-account-list" role="group" aria-label="卡券使用账号"></div>
   </section>
+  <div class="workspace-account-content">
   <p id="coupons-feedback" class="coupons-feedback" role="status" hidden></p>
   <section id="coupons-pending" class="coupons-account-panel" hidden><div class="coupons-account-heading"><h2>待支付订单</h2><span>继续已有订单，无需重新下单</span></div><div id="coupons-pending-list"></div></section>
   <section class="coupons-panel" aria-label="卡券列表">
@@ -28,6 +30,8 @@
     <div class="coupons-list-footer"><span id="coupons-sync">卡券信息以官方查询结果为准。</span><button id="coupons-more" class="secondary" type="button" hidden>加载更多</button></div>
   </section>
   <p class="coupons-footnote">支持的卡券可兑换话费、流量或用于充值；支付链接和二维码会在订单生成后显示，付款由你手动完成。</p>
+  </div>
+  </div>
 </main>
 <dialog id="coupons-details" aria-labelledby="coupons-details-title"><div class="coupons-dialog-heading"><div><span id="coupons-details-category" class="coupons-detail-category"></span><h2 id="coupons-details-title">卡券详情</h2></div><button id="coupons-details-close" class="close quiet" type="button" aria-label="关闭卡券详情">×</button></div><div class="coupons-details-value"><strong id="coupons-details-amount"></strong><span id="coupons-details-state"></span></div><dl id="coupons-details-meta" class="coupons-details-meta"></dl><section class="coupons-details-description"><h3>使用说明</h3><p id="coupons-details-description"></p></section><p class="coupons-details-note">支持的卡券可从列表操作栏兑换话费或用于充值，付款由你自行完成。</p></dialog>
 <dialog id="coupons-use" aria-labelledby="coupons-use-title"><form id="coupons-use-form">

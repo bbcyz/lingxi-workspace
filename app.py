@@ -40,6 +40,8 @@ from feature_control import FeatureControl
 import activities
 from coupon_client import CouponError, SORTS as COUPON_SORTS
 from coupon_use import CouponUseManager
+from coupon_native_device import NativeRechargeDevices
+from coupon_native_captcha import RechargeCaptcha
 from coupon_notices import CouponNotices
 from coupon_captcha import register_coupon_captcha
 from runtime_paths import DATA_DIR,RECHARGE_DATA_DIR
@@ -375,10 +377,13 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
 
     # The wallet entry's public deep-link channel applies independently of
     # the account's private APP login cookie.
+    coupon_recharge_devices=NativeRechargeDevices(coupon_credentials,database)
     coupon_uses = CouponUseManager(coupon_credentials, storage=database,
         payment_credentials_provider_by_id=unified.credentials,
         wallet_entry='https://touch.10086.cn/i/mobile/mycoupons.html?channelId=P00000004912',credential_cache=credential_cache,
-        app_session_recover=recover_coupon_app)
+        app_session_recover=recover_coupon_app,
+        recharge_devices=coupon_recharge_devices,
+        recharge_captcha=RechargeCaptcha(devices=coupon_recharge_devices.legacy))
     app.extensions['coupon_uses'] = coupon_uses
 
     def coupon_reminder_summary():
@@ -841,6 +846,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
             lingxi_scheduler.cancel_login(saved.id)
             credential_cache.forget(saved.id)
             coupon_uses.reminders.forget(saved.id)
+            coupon_uses.recharge_devices.forget(saved.id)
         unified.forget(phone)
         for logged in all_chat_accounts():
             if logged.app_phone == phone:

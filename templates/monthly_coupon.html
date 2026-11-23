@@ -12,6 +12,9 @@
 <body class="workspace-app" data-workspace="monthly-coupon"><main class="portal-shell monthly-shell">
   <section class="monthly-heading"><div><h1>每月话费券</h1><p>所有有效账号默认开启每日检查，每月领取话费券并完成每日打卡。</p></div><div class="monthly-heading-actions"><span id="monthly-month" class="monthly-month"></span><button id="monthly-page-configure" class="secondary" type="button" disabled>活动地址</button><button id="monthly-refresh" class="secondary" type="button">刷新</button><button id="monthly-configure" class="primary" type="button" disabled>自动设置</button></div></section>
   <p id="monthly-warning" class="monthly-notice" role="status" hidden></p><p id="monthly-feedback" class="monthly-feedback" role="status" hidden></p>
+  <div class="workspace-account-layout">
+  {% with account_table="monthly-accounts" %}{% include "workspace_account_index.html" %}{% endwith %}
+  <div class="workspace-account-content">
   <section class="monthly-panel" aria-label="各账号每月话费券情况">
     <div class="monthly-toolbar"><div class="monthly-toolbar-title"><h2>账号领取情况 <span id="monthly-total">—</span></h2><span id="monthly-summary">正在读取…</span></div><div class="monthly-filters"><select id="monthly-filter" aria-label="筛选每月领取状态"><option value="all">全部账号</option><option value="pending">待领取或做任务</option><option value="completed">两项均已领取</option><option value="automatic">已开启自动</option><option value="attention">需要处理</option><option value="ineligible">不符合活动条件</option></select><input id="monthly-search" type="search" placeholder="搜索账号或号码尾号" aria-label="搜索每月话费券账号" autocomplete="off"></div></div>
     <div class="monthly-selection"><label><input id="monthly-select-all" type="checkbox" disabled>全选当前可用账号</label><div class="monthly-batch-actions"><span id="monthly-selected-count">已选 0 个</span><button id="monthly-clear-selection" class="quiet" type="button" hidden>取消选择</button><button id="monthly-run-selected" class="primary" type="button" disabled>执行所选</button></div></div>
@@ -19,6 +22,8 @@
     <div class="monthly-panel-footer"><span id="monthly-sync">北京时间 · 自动刷新</span><span>贵州移动活动，资格与奖品以官方结果为准。</span></div>
   </section>
   <p class="monthly-footnote">直接领取和额外领取分别每月一次；打卡每天一次，累计三天。自动执行需要本地服务持续运行。</p>
+  </div>
+  </div>
 </main>
 <dialog id="monthly-settings" aria-labelledby="monthly-settings-title"><form id="monthly-settings-form">
   <div class="monthly-dialog-heading"><div><h2 id="monthly-settings-title">自动执行设置</h2><p id="monthly-settings-description"></p></div><button type="button" class="close quiet" data-monthly-close aria-label="关闭自动设置">×</button></div>

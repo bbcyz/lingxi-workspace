@@ -7,6 +7,7 @@ import * as M from './task-model.js';
   const time=v=>v?fmt.format(new Date(v)):'—';
   const node=(tag,cls='',text='')=>{const e=document.createElement(tag);e.className=cls;e.textContent=text;return e;};
   let data={accounts:[],logins:[],jobs:{}},selectedLogin='',tab=['tasks','checkin'].includes(new URLSearchParams(location.search).get('tab'))?new URLSearchParams(location.search).get('tab'):'activity',filter='all',selection=new Set(),shown=[],loaded=false,loading=false,mutation=false,stopping=[],queryHandled=false;
+  let inviteRequest=0;
   const busy=new Set(),prizes=new Map();
   const signBusy=new Set();
   const accountScope=()=>data.logins.filter(login=>!selectedLogin||login.id===selectedLogin);
@@ -46,10 +47,35 @@ import * as M from './task-model.js';
         run.disabled=working||login.status!=='active';
         wrap.append(run);
       }
-      if(current&&p.action==='manual')wrap.append(node('span','wed-note','请在 APP 完成任务'));
+      if(current&&p.action==='manual'){
+        if(p.task_id==='yqyh'){
+          const invite=button('获取邀请链接',()=>openCheckinInvite(login),'secondary');
+          invite.disabled=working||login.status!=='active';wrap.append(invite);
+        }else wrap.append(node('span','wed-note','请在 APP 完成任务'));
+      }
       actions.append(wrap);tr.append(accountCell(login),progress,task,prize,result,actions);return tr;
     });
     if(rows.length)$('wed-checkin-rows').replaceChildren(...rows);else empty('wed-checkin-rows',6,'登录共享账号后自动加入每日连续打卡。');
+  }
+  async function openCheckinInvite(login){
+    const dialog=$('wed-checkin-invite'),content=$('wed-checkin-invite-content'),message=$('wed-checkin-invite-message');
+    const link=$('wed-checkin-invite-url'),command=$('wed-checkin-invite-command'),errorNote=$('wed-checkin-command-error');
+    const request=++inviteRequest;
+    $('wed-checkin-invite-account').textContent=login.phone_masked;
+    content.hidden=true;link.value='';command.value='';errorNote.hidden=true;
+    message.textContent='正在获取官方邀请链接和口令…';dialog.showModal();
+    try{
+      const result=await api('/api/checkin/invite',{login_id:login.id});
+      if(!dialog.open||request!==inviteRequest)return;
+      link.value=result.invite_url;command.value=result.invite_command||'';
+      $('wed-checkin-command-copy').disabled=!command.value;
+      errorNote.hidden=Boolean(command.value);
+      errorNote.textContent=result.invite_command_error||'官方暂未返回邀请口令。';
+      content.hidden=false;
+      message.textContent='请分享给本月未登录中国移动 APP 的好友。对方助力后，点「查询进度」确认。';
+    }catch(error){
+      if(dialog.open&&request===inviteRequest)message.textContent=error.message;
+    }
   }
   async function runCheckins(logins,submit=false){
     const state=data.checkin,day=checkinDay(),workingIds=new Set([...signBusy,...(state?.active||[])]);
@@ -215,6 +241,26 @@ import * as M from './task-model.js';
   $('wed-claim-now').addEventListener('click',runWeeklyClaims);
   $('wed-checkin-sign').addEventListener('click',()=>runCheckins(accountScope(),true));
   $('wed-checkin-refresh').addEventListener('click',()=>runCheckins(accountScope()));
+  $('wed-checkin-invite-close').addEventListener('click',()=>$('wed-checkin-invite').close());
+  async function copyCheckinInvite(input,label){
+    const message=$('wed-checkin-invite-message'),request=inviteRequest;
+    try{
+      if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(input.value);
+      else{
+        input.focus();input.select();
+        if(!document.execCommand('copy')){
+          message.textContent=`${label}已选中，请手动复制。`;
+          return;
+        }
+      }
+      if(request===inviteRequest)message.textContent=`邀请${label}已复制。`;
+    }catch{
+      if(request!==inviteRequest||!$('wed-checkin-invite').open)return;
+      input.focus();input.select();message.textContent=`${label}已选中，请手动复制。`;
+    }
+  }
+  $('wed-checkin-invite-copy').addEventListener('click',()=>copyCheckinInvite($('wed-checkin-invite-url'),'链接'));
+  $('wed-checkin-command-copy').addEventListener('click',()=>copyCheckinInvite($('wed-checkin-invite-command'),'口令'));
   $('wed-checkin-settings').addEventListener('click',()=>{const settings=data.checkin.settings;$('wed-checkin-enabled').checked=settings.enabled;$('wed-checkin-time').value=settings.time;$('wed-checkin-config-error').hidden=true;$('wed-checkin-config').showModal();});
   $('wed-checkin-config-form').addEventListener('submit',async e=>{e.preventDefault();if(mutation)return;mutation=true;try{await api('/api/checkin/settings',{enabled:$('wed-checkin-enabled').checked,time:$('wed-checkin-time').value});$('wed-checkin-config').close();await refresh();}catch(error){$('wed-checkin-config-error').textContent=error.message;$('wed-checkin-config-error').hidden=false;}finally{mutation=false;}});
   window.addEventListener('accounts-changed',refresh);window.addEventListener('focus',refresh);refresh();setInterval(()=>{if(!document.hidden&&!mutation)refresh();},4000);

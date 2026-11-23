@@ -100,7 +100,9 @@
     $('gold-ended').hidden = !model.campaign.ended;
     const rows = shown.map(account => {
       const row = node('tr'), identity = node('td'), signed = signedToday(account), status = node('td');
-      identity.append(node('strong', '', account.name || account.phone_masked), node('small', '', account.phone_masked));
+      identity.setAttribute('data-workspace-account',account.id);
+    identity.setAttribute('data-workspace-phone',account.phone_masked||'');
+    identity.append(node('strong', '', account.name || account.phone_masked), node('small', '', account.phone_masked));
       if (account.status !== 'active') identity.append(node('small', 'gold-login-warning', '需要重新登录'));
       status.append(badge(signed === true ? '今日已打卡' : signed === false ? '今日待打卡' : '待查询', signed === true ? 'success' : signed === false ? 'pending' : ''));
       const prizes = node('td'); prizes.append(prizeList(account.observation?.prizes, account.id));

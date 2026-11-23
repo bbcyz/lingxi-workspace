@@ -122,7 +122,12 @@ class CouponCashierH5:
             raise CouponCashierError('官方订单服务暂未返回有效结果。', 'CASHIER_HTTP')
         try:
             outer = response.json()
-            result = json.loads(_decrypt(outer['body']))
+            # The NR gateway reports an expired read session as plain 401;
+            # successful order data still requires the encrypted body.
+            if isinstance(outer,dict)and 'body'not in outer and str(outer.get('returnCode'))=='401':
+                result=outer
+            else:
+                result = json.loads(_decrypt(outer['body']))
             if not isinstance(result, dict):
                 raise ValueError('invalid result')
         except (ValueError, TypeError, KeyError) as error:

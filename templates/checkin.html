@@ -17,8 +17,11 @@
     <article class="checkin-overview-card"><span class="checkin-symbol orange"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><div><h2><span id="checkin-flash-title">签到秒杀</span> <span id="checkin-flash-count" class="checkin-count">正在读取</span></h2><p id="checkin-flash-schedule">按北京时间的官方场次安排，自动识别每周或月末秒杀。</p></div></article>
     {% if checkin_wechat_available %}<a class="checkin-overview-card checkin-channel-entry" href="/checkin/wechat"><span class="checkin-symbol green"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18 M7 6.5h.01 M10 6.5h.01 M8 14l2 2 5-4"/></svg></span><div><h2>微信渠道签到</h2><p>独立签到记录与登录会话</p></div><span class="checkin-channel-arrow" aria-hidden="true">→</span></a>{% endif %}
   </section>
+  <div class="workspace-account-layout">
+  {% with account_table="checkin-accounts", account_view="checkin-view-accounts" %}{% include "workspace_account_index.html" %}{% endwith %}
+  <div class="workspace-account-content">
   <section class="checkin-list-panel" aria-label="账号签到与自动任务">
-    <div class="checkin-list-heading"><div class="checkin-tabs" role="group" aria-label="查看内容"><button class="selected" data-checkin-view="accounts" aria-pressed="true">账号签到情况 <span id="checkin-account-total">—</span></button><button data-checkin-view="tasks" aria-pressed="false">自动任务 <span id="checkin-task-count">—</span></button></div><input id="checkin-search" class="checkin-search" type="search" placeholder="搜索账号或号码尾号" aria-label="搜索签到账号或任务" autocomplete="off"></div>
+    <div class="checkin-list-heading"><div class="checkin-tabs" role="group" aria-label="查看内容"><button id="checkin-view-accounts" class="selected" data-checkin-view="accounts" aria-pressed="true">账号签到情况 <span id="checkin-account-total">—</span></button><button data-checkin-view="tasks" aria-pressed="false">自动任务 <span id="checkin-task-count">—</span></button></div><input id="checkin-search" class="checkin-search" type="search" placeholder="搜索账号或号码尾号" aria-label="搜索签到账号或任务" autocomplete="off"></div>
     <div id="checkin-account-controls" class="checkin-account-controls"><select id="checkin-account-state-filter" aria-label="筛选今日签到状态"><option value="all">全部签到状态</option><option value="signed">今日已签到</option><option value="unsigned">今日未签到</option><option value="unknown">尚未查询</option><option value="attention">需要处理</option></select><span id="checkin-account-summary">正在读取账号签到情况…</span></div>
     <div id="checkin-task-controls" class="checkin-task-controls" hidden><div class="checkin-tabs" role="group" aria-label="任务类型筛选"><button class="selected" data-checkin-kind="all" aria-pressed="true">全部任务</button><button data-checkin-kind="signin" aria-pressed="false">每日签到</button><button data-checkin-kind="flash" aria-pressed="false">签到秒杀</button></div></div>
     <div id="checkin-selection-bar" class="checkin-selection" hidden><label><input id="checkin-select-tasks" type="checkbox" disabled>全选可停止任务</label><div><span id="checkin-selected-tasks">已选 0 项</span><button id="checkin-clear-tasks" class="quiet" type="button" hidden>取消选择</button><button id="checkin-stop-tasks" class="secondary" type="button" disabled>停止所选</button></div></div>
@@ -38,6 +41,8 @@
     </div>
   </section>
   <p class="checkin-footnote">定时任务需要本地服务持续运行，电脑保持开机、联网且不休眠。</p>
+  </div>
+  </div>
 </main>
 <dialog id="checkin-editor" aria-labelledby="checkin-editor-title"><form id="checkin-form">
   <div class="checkin-dialog-heading"><div><h2 id="checkin-editor-title">配置自动任务</h2><p id="checkin-editor-description">默认应用于所有有效账号，新增或恢复登录后自动纳入。</p></div><button type="button" class="close quiet" data-checkin-close="checkin-editor" aria-label="关闭任务配置">×</button></div>

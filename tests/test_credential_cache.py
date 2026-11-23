@@ -225,6 +225,61 @@ class CredentialCacheTests(unittest.TestCase):
         self.assertIsNone(CredentialCache(self.storage).load('scope-a',other))
 
 
+    def test_device_cookie_expiry_does_not_expire_the_wallet_login(self):
+        first=self.connect()
+        unused=Mock(side_effect=AssertionError('valid identity must not be initialized again'))
+        self.cache.connect('scope-a',SNAPSHOT,first,unused,headers=('Authorization',),
+                           expiry_excluded_cookies=('stc-rrt-token',))
+        first.cookies.jar.set_cookie(Cookie(0,'stc-rrt-token','device-fixture',None,False,
+            'official.test',False,False,'/i',True,True,1100,False,None,None,{}))
+        self.cache.sync(first)
+        self.assertIsNone(self.cache.load('scope-a',SNAPSHOT)['expires_at'])
+        self.clock[0]=1200
+        restarted=CredentialCache(self.storage,now=lambda:self.clock[0])
+        second=http_client()
+        restarted.connect('scope-a',SNAPSHOT,second,unused,headers=('Authorization',),
+                          expiry_excluded_cookies=('stc-rrt-token',))
+        self.assertEqual(second.cookies.get('sessionToken'),'opaque-secret-cookie')
+        self.assertIsNone(second.cookies.get('stc-rrt-token'))
+        unused.assert_not_called()
+
+    def test_new_device_expiry_policy_repairs_legacy_metadata_without_reauthentication(self):
+        first=self.connect()
+        first.cookies.jar.set_cookie(Cookie(0,'stc-rrt-token','old-device-fixture',None,False,
+            'official.test',False,False,'/i',True,True,1100,False,None,None,{}))
+        self.cache.sync(first)
+        old=self.cache.load('scope-a',SNAPSHOT)
+        self.assertEqual(old['expires_at'],1100)
+        self.clock[0]=1200
+        restarted=CredentialCache(self.storage,now=lambda:self.clock[0])
+        unused=Mock(side_effect=AssertionError('metadata migration is not login expiry'))
+        second=http_client()
+        restarted.connect('scope-a',{**SNAPSHOT,'credential_revision':8},second,unused,
+            headers=('Authorization',),expiry_excluded_cookies=('stc-rrt-token',))
+        repaired=restarted.load('scope-a',SNAPSHOT)
+        self.assertEqual(repaired['generation'],old['generation'])
+        self.assertIsNone(repaired['expires_at'])
+        unused.assert_not_called()
+
+    def test_excluding_device_expiry_keeps_real_auth_expiry_and_read_recovery_policy(self):
+        client=http_client();calls=[]
+        def initialize():
+            calls.append(self.clock[0])
+            client.cookies.jar.set_cookie(Cookie(0,'sessionToken','auth-fixture',None,False,
+                'official.test',True,False,'/',True,True,self.clock[0]+500,False,None,None,{}))
+            client.cookies.jar.set_cookie(Cookie(0,'stc-rrt-token','device-fixture',None,False,
+                'official.test',False,False,'/i',True,True,self.clock[0]+100,False,None,None,{}))
+            return {}
+        self.cache.connect('scope-a',SNAPSHOT,client,initialize,expiry_excluded_cookies=('stc-rrt-token',))
+        self.assertEqual(self.cache.load('scope-a',SNAPSHOT)['expires_at'],1500)
+        self.assertTrue(self.cache.recover(client))
+        self.assertEqual(client._credential_expiry_excluded_cookies,['stc-rrt-token'])
+        self.clock[0]=1600
+        self.assertIsNone(self.cache.load('scope-a',SNAPSHOT))
+        self.cache.connect('scope-a',SNAPSHOT,client,initialize,expiry_excluded_cookies=('stc-rrt-token',))
+        self.assertEqual(calls,[1000,1000,1600])
+
+
 class CheckinReuseTests(unittest.TestCase):
     def setUp(self):
         self.cache = CredentialCache()

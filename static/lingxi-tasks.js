@@ -36,7 +36,9 @@ function render(){
     const select=node('input','task-checkbox');select.type='checkbox';select.checked=selectedTasks.has(task.id);
     select.setAttribute('aria-label',`选择 ${task.account_name} 在 ${format(task.next_run_at||task.run_at)} 的任务`);
     select.addEventListener('change',()=>{if(select.checked)selectedTasks.add(task.id);else selectedTasks.delete(task.id);updateTaskSelection();});
-    selection.append(select);account.append(node('strong','',task.account_name));
+    selection.append(select);account.setAttribute('data-workspace-account',task.login_id);
+    account.setAttribute('data-workspace-phone',task.phone_masked||'');
+    account.append(node('strong','',task.account_name));
     if(task.phone_masked&&task.phone_masked!==task.account_name)account.append(node('small','',task.phone_masked));
     const status=node('td');status.append(badge(task.state));
     const content=node('td'),contentText=node('p','table-content',task.content);contentText.title=task.content;content.append(contentText);

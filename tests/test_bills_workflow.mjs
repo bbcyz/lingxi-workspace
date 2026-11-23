@@ -29,7 +29,7 @@ const usage=(extra={})=>({overview:[
   {key:'flow',name:'通用流量',unit:'GB',total:'60.00',used:'12.50',remaining:'47.50',scope:'国内通用'},
   {key:'voice',name:'国内通话',unit:'分钟',total:'500',used:'0',remaining:'500'},
   {key:'sms',name:'短信',unit:'条',total:null,used:0,remaining:null},
-],groups:[{name:'国内通用流量',items:[{name:'5G套餐流量',unit:'GB',total:'60.00',used:'12.50',remaining:'47.50',scope:'国内（不含港澳台）',start_at:'2026-11-01',end_at:'2026-11-30',description:'当月有效',children:[{name:'结转流量',unit:'MB',total:'1024',used:0,remaining:'1024'}]}]}],notes:['套餐余量以实际使用情况为准。'],queried_at:'2026-11-06T10:15:30+08:00',...extra});
+],groups:[{key:'flow',name:'国内通用流量',items:[{name:'5G套餐流量',unit:'GB',total:'60.00',used:'12.50',remaining:'47.50',scope:'国内（不含港澳台）',start_at:'2026-11-01',end_at:'2026-11-30',description:'当月有效',children:[{name:'结转流量',unit:'MB',total:'1024',used:0,remaining:'1024'}]}]}],notes:['套餐余量以实际使用情况为准。'],queried_at:'2026-11-06T10:15:30+08:00',...extra});
 const services=(extra={})=>({groups:[{name:'手机 · 我的套餐',items:[{name:'5G畅享套餐',fee:'128元/月',status:'已生效',fields:[{name:'订购时间',value:'2026-01-01 08:00:00'},{name:'有效期',value:'2026-01-01 至 2026-12-31'},{name:'业务说明',value:'套餐内含国内语音和流量。'}],children:[{name:'来电显示',fee:'免费',status:'已生效',fields:[{name:'业务类型',value:'套餐附属业务'}],children:[]}]}]},{name:'增值业务',items:[{name:'视频会员',fee:null,status:null,fields:[{name:'业务说明',value:null}],children:[]}]}],notes:['已订业务资费以实际生效规则为准。'],queried_at:'2026-11-06T10:15:30+08:00',...extra});
 
 async function fixture(options={}){
@@ -289,20 +289,36 @@ test('bill and usage requests start together and each result renders without wai
   slowUsage.resolve({data:usage()});await refresh;
 });
 
-test('usage meter uses the supplied raw-unit ratio and removes only redundant scope labels',async()=>{
+test('the usage overview shows all measured resources and their official ratios together',async()=>{
   const env=await fixture({usageQuery:async()=>({data:usage({overview:[
-    {key:'flow',name:'国内通用流量',scope:'国内通用流量',unit:'MB',total:'10240',used:'512',remaining:'9728',used_percent:'5.00',display:{total:{value:'10',unit:'GB'},used:{value:'512',unit:'MB'},remaining:{value:'9.5',unit:'GB'}}},
-    {key:'voice',name:'国内通话',scope:'仅限国内主叫',unit:'分钟',total:'100',used:'0',remaining:'100',used_percent:'0.00'},
-    {key:'sms',name:'短信',unit:'条',total:null,used:null,remaining:null,used_percent:null},
+    {key:'flow',name:'定向流量',unit:'GB',total:'75',used:'21.32',remaining:'53.68',used_percent:'28.42',remaining_percent:'71.57'},
+    {key:'flow',name:'国内通用流量',scope:'国内通用流量',unit:'MB',total:'10240',used:'10240',remaining:'0',used_percent:'100.00',remaining_percent:'0.00',display:{total:{value:'10',unit:'GB'},used:{value:'10',unit:'GB'},remaining:{value:'0',unit:'MB'}}},
+    {key:'voice',name:'国内通话',scope:'仅限国内主叫',unit:'分钟',total:'100',used:'0',remaining:'100',used_percent:'0.00',remaining_percent:'100.00'},
+    {key:'sms',name:'短信',unit:'条',total:null,used:null,remaining:null,remaining_percent:null},
   ]})})});
   const overview=env.get('usage-overview'),meters=withClass(overview,'usage-meter');
-  assert.equal(meters.length,2);assert.equal(meters[0].attributes['aria-valuenow'],'5.00');
-  assert.equal(meters[0].children[0].style.width,'5.00%');
-  assert.equal(meters[1].attributes['aria-valuenow'],'0.00');
-  assert.equal(withClass(overview.children[0],'usage-overview-meta').length,0);
-  assert.doesNotMatch(text(overview.children[0]),/适用范围|适用说明/);
-  assert.match(text(overview.children[1]),/适用范围：仅限国内主叫/);
-  assert.match(text(overview.children[0]),/总量.*10.*GB.*已用.*512.*MB/);
+  let cards=withClass(overview,'usage-overview-card');
+  assert.deepEqual(withClass(overview,'usage-overview-title').map(title=>title.textContent),['国内通用流量','定向流量','国内通话','短信']);
+  assert.deepEqual(overview.children.map(row=>row.children.map(card=>card.attributes['data-usage-kind'])),[['flow','flow'],['voice','sms']]);
+  assert.equal(meters.length,3);
+  assert.equal(meters[0].attributes['aria-valuenow'],'0.00');
+  assert.equal(withClass(meters[0],'usage-meter-pointer')[0].style.transform,'rotate(180.000deg)');
+  assert.match(text(cards[0]),/国内通用流量.*已用.*10.*GB.*已用尽/);
+  assert.doesNotMatch(text(cards[0]),/适用范围|适用说明|5G套餐流量/);
+  assert.equal(meters[1].attributes['aria-valuenow'],'71.57');
+  assert.equal(meters[1].attributes['aria-valuetext'],'剩余约 71%');
+  assert.match(withClass(meters[1],'usage-meter-ring')[0].style.background,/51\.156deg/);
+  assert.equal(withClass(meters[1],'usage-meter-pointer')[0].style.transform,'rotate(51.156deg)');
+  assert.match(text(cards[1]),/定向流量.*剩余约.*71%.*使用中/);
+  const toggle=withClass(cards[0],'usage-group-heading')[0];
+  await toggle.click();
+  cards=withClass(overview,'usage-overview-card');
+  assert.match(text(cards[0]),/收起详细信息.*5G套餐流量.*结转流量/);
+  assert.doesNotMatch(text(cards[1]),/5G套餐流量/);
+  assert.match(text(cards[2]),/国内通话.*剩余\s+100%.*适用范围：仅限国内主叫/);
+  assert.equal(withClass(cards[2],'usage-meter-pointer')[0].style.transform,'rotate(0.000deg)');
+  assert.match(text(cards[3]),/短信.*可用余量.*—/);
+  assert.equal(withClass(cards[3],'usage-meter').length,0);
   assert.equal(usageQueries(env).length,1);
 });
 
@@ -313,17 +329,17 @@ test('usage values preserve units, zeros, unknowns, unlimited data and separate 
     {key:'sms',name:'短信',unit:'条',total:null,used:0,remaining:null},
   ]})})});
   const overview=text(env.get('usage-overview'));
-  assert.match(overview,/通用流量.*1024\.50.*MB.*总量.*1024\.50.*MB.*已用.*0.*MB.*国内/);
-  assert.match(overview,/定向流量.*不限量.*总量.*不限量.*已用.*3\.25.*GB.*指定视频/);
-  assert.match(overview,/短信.*剩余.*—.*总量.*—.*已用.*0.*条/);
+  assert.match(overview,/通用流量.*1024\.50.*MB.*已用.*0.*MB.*总量.*1024\.50.*MB.*国内/);
+  assert.match(overview,/定向流量.*不限量.*已用.*3\.25.*GB.*总量.*不限量.*指定视频/);
   assert.doesNotMatch(overview,/元/);
-  assert.equal(env.get('usage-overview').children.length,3);
+  assert.equal(withClass(env.get('usage-overview'),'usage-overview-card').length,3);
   assert.doesNotMatch(text(env.get('usage-groups')),/5G套餐流量|结转流量/);
   const group=env.get('usage-groups').children[0].children[0];
   assert.equal(group.attributes['aria-expanded'],'false');await group.click();
   const details=text(env.get('usage-groups'));
   assert.match(details,/5G套餐流量.*已用.*12\.50.*GB.*剩余.*47\.50.*GB.*总量.*60\.00.*GB/);
   assert.match(details,/适用范围：国内（不含港澳台）.*有效期：2026-11-01 至 2026-11-30.*当月有效.*结转流量/);
+  assert.match(text(env.get('usage-overview')),/短信.*可用余量.*—.*已用.*0.*条.*总量.*—/);
   assert.match(text(env.get('usage-notes-list')),/套餐余量以实际使用情况为准/);
   assert.equal(usageQueries(env).length,1);assert.equal(queries(env).length,1);
 });
@@ -332,7 +348,7 @@ test('a single measured resource uses one usage card without empty wrapper count
   const metadata={scope:'定向流量 / 不可共享',start_at:'2026-11-01 00:00:00',end_at:'2026-12-01 00:00:00',description:'移动云盘定向'};
   const resource={name:'0元和彩云定向流量（包月）',unit:'MB',total:'30720.00',used:'0.00',remaining:'30720.00',remaining_percent:'100.00',...metadata,
     display:{total:{value:'30',unit:'GB'},used:{value:'0',unit:'MB'},remaining:{value:'30',unit:'GB'}},children:[]};
-  const env=await fixture({usageQuery:async()=>({data:usage({groups:[{name:'定向流量',items:[{name:'30GB移动云盘定向流量免费服务',total:null,used:null,remaining:null,...metadata,children:[resource]}]}]})})});
+  const env=await fixture({usageQuery:async()=>({data:usage({groups:[{key:'flow',name:'定向流量',items:[{name:'30GB移动云盘定向流量免费服务',total:null,used:null,remaining:null,...metadata,children:[resource]}]}]})})});
   await env.get('usage-groups').children[0].children[0].click();
   const group=env.get('usage-groups'),content=text(group);
   assert.equal(withClass(group,'usage-item').length,1);
@@ -354,23 +370,43 @@ test('a single measured resource uses one usage card without empty wrapper count
 });
 
 test('multiple resources retain separate quantities and their distinct metadata without a fake package aggregate',async()=>{
-  const env=await fixture({usageQuery:async()=>({data:usage({groups:[{name:'通用流量',items:[{name:'组合套餐',total:null,used:null,remaining:null,scope:'国内',children:[
+  const env=await fixture({usageQuery:async()=>({data:usage({groups:[{key:'flow',name:'通用流量',items:[{name:'组合套餐',total:null,used:null,remaining:null,scope:'国内',children:[
     {name:'本月流量',unit:'GB',total:'5',used:'1',remaining:'4',scope:'国内',end_at:'2026-12-01'},
     {name:'结转流量',unit:'MB',total:'1024',used:'0',remaining:'1024',scope:'上月结转',end_at:'2026-11-30'},
   ]}]}]})})});
-  await env.get('usage-groups').children[0].children[0].click();
-  const group=env.get('usage-groups');
+  const overview=env.get('usage-overview');
+  await withClass(overview,'usage-group-heading')[0].click();
+  const group=withClass(overview,'usage-group')[0];
   assert.equal(withClass(group,'usage-item-counters').length,2);
   assert.match(text(group),/本月流量.*4.*GB.*上月结转.*2026-11-30/);
   assert.equal((text(group).match(/适用范围：国内/g)||[]).length,1);
   assert.equal(withClass(group,'usage-progress').length,0,'未返回比例时不由前端猜算');
 });
 
+test('other resources are hidden while the current plan and separate usage details remain available',async()=>{
+  const env=await fixture({usageQuery:async()=>({data:usage({groups:[
+    {name:'其他资源',items:[{name:'示例附加权益',used:'0',unit:'分钟'}]},
+    {name:'套餐信息',items:[{name:'黔心选套餐',children:[{name:'套餐通话',unit:'分钟',total:'100'}]}]},
+    {name:'国际及港澳台用量',items:[{name:'境外流量包',unit:'MB',used:'3'}]},
+    {key:'voice',name:'套餐外通话',items:[{name:'套餐外主叫',unit:'分钟',used:'2'}]},
+  ]})})});
+  const plan=env.get('usage-plan'),groups=env.get('usage-groups');
+  assert.equal(plan.textContent,'黔心选套餐');
+  assert.equal(groups.hidden,false);
+  assert.match(text(groups),/套餐信息.*国际及港澳台用量.*套餐外通话/);
+  assert.doesNotMatch(text(groups),/其他资源|黔心选套餐/);
+  plan.onclick();
+  assert.match(text(groups),/套餐信息.*黔心选套餐.*套餐通话.*国际及港澳台用量.*套餐外通话/);
+  assert.equal(env.get('usage-detail-0').focused,true);
+  assert.equal(withClass(env.get('usage-overview'),'usage-overview-card').length,3);
+  assert.equal(usageQueries(env).length,1);
+});
+
 test('package grid lifts identical scope and validity once while preserving per-package descriptions',async()=>{
   const common={scope:'指定应用 / 不可共享',start_at:'2026-11-01',end_at:'2026-12-01'};
   const items=[{name:'云盘权益',total:'30',used:'0',remaining:'30',description:'适用于云盘'},
     {name:'视频权益',total:'10',used:'2',remaining:'8',description:'适用于视频'}].map(item=>({...common,...item,unit:'GB',children:[]}));
-  const env=await fixture({usageQuery:async()=>({data:usage({groups:[{name:'定向流量',items}]})})});
+  const env=await fixture({usageQuery:async()=>({data:usage({groups:[{key:'flow',name:'定向流量',items}]})})});
   await env.get('usage-groups').children[0].children[0].click();
   const group=env.get('usage-groups');
   assert.equal(withClass(group,'usage-group-context').length,1);
@@ -384,7 +420,7 @@ test('package grid lifts identical scope and validity once while preserving per-
 });
 
 test('package grid does not merge different validity ranges or lose nested resource constraints',async()=>{
-  const env=await fixture({usageQuery:async()=>({data:usage({groups:[{name:'流量',items:[
+  const env=await fixture({usageQuery:async()=>({data:usage({groups:[{key:'flow',name:'流量',items:[
     {name:'当月包',scope:'国内',start_at:'2026-11-01',end_at:'2026-11-30',total:'5',used:'1',remaining:'4',unit:'GB',children:[]},
     {name:'结转包',scope:'结转专用',start_at:'2026-11-01',end_at:'2026-11-15',total:'2',used:'0',remaining:'2',unit:'GB',children:[]},
   ]}]})})});

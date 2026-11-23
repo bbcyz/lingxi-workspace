@@ -1,6 +1,8 @@
 <main class="portal-shell wed-shell">
   <section class="wed-heading"><div><h1>周三充值日</h1><p>每日连续打卡领8折券；每周三 07:55 准备、08:00 抢券。</p></div><button id="wed-refresh" class="secondary" type="button">刷新</button></section>
-  <section class="wed-account-panel" aria-label="共享账号"><div class="wed-account-heading"><h2>共享账号 <span id="wed-account-count">—</span></h2><span>有效账号自动参与，无需预约</span></div><div id="wed-accounts" class="wed-accounts" role="group" aria-label="查看充值日账号"></div></section>
+  <div class="workspace-account-layout">
+  <section class="workspace-account-rail wed-account-panel" aria-label="共享账号"><div class="wed-account-heading"><h2>共享账号 <span id="wed-account-count">—</span></h2><span>有效账号自动参与，无需预约</span></div><div id="wed-accounts" class="wed-accounts workspace-account-list" role="group" aria-label="查看充值日账号"></div></section>
+  <div class="workspace-account-content">
   <p id="wed-feedback" class="wed-feedback" role="status" hidden></p><p id="wed-warning" class="wed-feedback warning" role="alert" hidden></p>
   <section class="wed-panel"><div class="wed-list-heading"><div class="wed-tabs" role="tablist" aria-label="周三充值日内容"><button id="wed-tab-activity" role="tab" aria-controls="wed-activity" aria-selected="true" type="button">活动与奖品</button><button id="wed-tab-checkin" role="tab" aria-controls="wed-checkin" aria-selected="false" type="button">连续打卡</button><button id="wed-tab-tasks" role="tab" aria-controls="wed-tasks" aria-selected="false" type="button">领取任务 <span id="wed-task-count"></span></button></div><span id="wed-scope">全部账号</span></div>
     <div id="wed-activity" role="tabpanel" aria-labelledby="wed-tab-activity"><div class="wed-toolbar"><span class="wed-automatic">自动领取已开启</span><div class="wed-row-actions"><span id="wed-opening">每周三 · 07:55 准备 → 08:00 领取</span><button id="wed-claim-now" class="primary" type="button" disabled>立即抢券</button></div></div><div class="wed-table-wrap"><table class="wed-table"><thead><tr><th>共享账号</th><th>活动状态</th><th>自动领取 · 北京时间</th><th>最近结果</th><th>操作</th></tr></thead><tbody id="wed-status-rows"><tr><td colspan="5" class="wed-empty">正在读取账号…</td></tr></tbody></table></div>
@@ -14,7 +16,20 @@
     <div id="wed-tasks" role="tabpanel" aria-labelledby="wed-tab-tasks" hidden><div class="wed-toolbar"><div class="wed-filters" role="group" aria-label="任务状态筛选"><button type="button" data-wed-filter="all" class="selected">全部</button><button type="button" data-wed-filter="scheduled">待执行</button><button type="button" data-wed-filter="running">执行中</button><button type="button" data-wed-filter="attention">需处理</button><button type="button" data-wed-filter="ended">已结束</button></div><input id="wed-task-search" type="search" placeholder="搜索账号或执行结果" aria-label="搜索充值日任务"></div><div class="wed-selection"><label><input id="wed-select-all" type="checkbox">全选当前可停止的任务</label><div><span id="wed-selected-count">已选 0 项</span><button id="wed-stop-selected" class="secondary" type="button" disabled>停止本周所选</button></div></div><div class="wed-table-wrap"><table class="wed-table wed-task-table"><thead><tr><th aria-label="选择">选</th><th>执行账号</th><th>状态</th><th>执行计划 · 北京时间</th><th>执行进度</th><th>最近结果</th><th>操作</th></tr></thead><tbody id="wed-task-rows"></tbody></table></div></div>
     <footer class="wed-footer"><span id="wed-sync">北京时间 · 正在同步…</span><span>新增或恢复登录后自动纳入</span></footer>
   </section>
+  </div>
+  </div>
 </main>
+<dialog id="wed-checkin-invite" aria-labelledby="wed-checkin-invite-title">
+  <div class="wed-dialog-heading"><div><h2 id="wed-checkin-invite-title">邀请好友助力</h2><p id="wed-checkin-invite-account"></p></div><button id="wed-checkin-invite-close" class="close quiet" type="button" aria-label="关闭邀请链接">×</button></div>
+  <p id="wed-checkin-invite-message" class="wed-note" role="status"></p>
+  <div id="wed-checkin-invite-content" class="wed-invite-content" hidden>
+    <label for="wed-checkin-invite-url">邀请链接</label>
+    <div class="wed-invite-field"><input id="wed-checkin-invite-url" type="url" readonly><button id="wed-checkin-invite-copy" class="secondary" type="button">复制链接</button></div>
+    <label for="wed-checkin-invite-command">邀请口令</label>
+    <div class="wed-invite-field"><textarea id="wed-checkin-invite-command" readonly rows="3"></textarea><button id="wed-checkin-command-copy" class="secondary" type="button">复制口令</button></div>
+    <p id="wed-checkin-command-error" class="wed-note" role="status" hidden></p>
+  </div>
+</dialog>
 <dialog id="wed-detail" aria-labelledby="wed-detail-title"><div class="wed-dialog-heading"><div><h2 id="wed-detail-title">领取记录</h2><p id="wed-detail-summary"></p></div><button class="close quiet" type="button" data-wed-close aria-label="关闭领取记录">×</button></div><div id="wed-detail-history"></div></dialog>
 <dialog id="wed-stop" aria-labelledby="wed-stop-title"><form id="wed-stop-form"><div class="wed-dialog-heading"><h2 id="wed-stop-title">停止本周领取</h2><button class="close quiet" type="button" data-wed-close aria-label="关闭停止确认">×</button></div><p id="wed-stop-description"></p><p class="wed-note">停止后不再发起本周的后续请求，已发出的请求仍会记录结果。下周三自动恢复。</p><p id="wed-stop-error" class="wed-error" role="alert" hidden></p><div class="wed-dialog-actions"><button class="secondary" type="button" data-wed-close>保留任务</button><button id="wed-stop-confirm" class="primary" type="submit">停止本周领取</button></div></form></dialog>
 
