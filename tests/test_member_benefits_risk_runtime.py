@@ -1,11 +1,15 @@
 import base64
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, call, patch
 
+from features.member_benefits import risk_runtime
 from features.member_benefits.risk_runtime import (
     DFP_SDK_SHA256,
     WHEEL_GLUE_SHA256,
@@ -43,6 +47,32 @@ print('concurrent-runtime-ok')
                 'assert runtime.ANDROID; assert "py_mini_racer" not in sys.modules')
         subprocess.run([sys.executable, '-c', code], cwd=Path(__file__).resolve().parents[1],
                        env={**os.environ, 'LINGXI_ANDROID': '1'}, check=True)
+
+    def test_android_http_callbacks_round_trip_json(self):
+        payload = {'url': 'https://example.test/device', 'method': 'POST', 'headers': {}, 'body': '{}'}
+        response = {'status': 200, 'headers': {'content-type': 'application/json'}, 'body': '{"结果":"通过"}'}
+        http_bridge = Mock(return_value=response)
+
+        def native_run(result, args):
+            callback = args[-2]
+            self.assertEqual(json.loads(callback(json.dumps(payload))), response)
+            return json.dumps(result)
+
+        wheel_result = {'calls': []}
+        device_result = {'token': 't' * 40}
+        native = SimpleNamespace(
+            runWheel=lambda *args: native_run(wheel_result, args),
+            runDfp=lambda *args: native_run(device_result, args),
+        )
+        java = SimpleNamespace(jclass=lambda name: native)
+        with patch.dict(sys.modules, {'java': java}), patch.object(risk_runtime, 'ANDROID', True):
+            with tempfile.TemporaryDirectory() as temporary:
+                state = Path(temporary) / 'dfp-state.json'
+                result = run_dfp(server=payload['url'], state_path=state, http_bridge=http_bridge)
+            self.assertEqual(result['result']['gr-risk-p3'], device_result['token'])
+            self.assertEqual(run_wheel('t' * 36, http_bridge=http_bridge), wheel_result)
+
+        self.assertEqual(http_bridge.call_args_list, [call(payload), call(payload)])
 
     def test_dfp_mock_runs_pinned_sdk_and_persists_state(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -123,6 +123,19 @@ def _wheel_glue_source(trace_env: bool = False) -> str:
     return source + "\n//# sourceURL=https://res.coc.10086.cn/res/cdn/coc1-online/fixedPath/coc3/WASM/wheel-0.0.8.js\n"
 
 
+def _android_http_callback(http_bridge: HttpBridge | None) -> Callable[[str], str] | None:
+    if http_bridge is None:
+        return None
+
+    def request(payload_json: str) -> str:
+        response = http_bridge(json.loads(payload_json))
+        if asyncio.iscoroutine(response):
+            response = asyncio.run(response)
+        return json.dumps(response, ensure_ascii=False, separators=(",", ":"))
+
+    return request
+
+
 def _android_wheel(config: dict[str, Any], http_bridge: HttpBridge | None) -> dict[str, Any]:
     from java import jclass
 
@@ -131,7 +144,7 @@ def _android_wheel(config: dict[str, Any], http_bridge: HttpBridge | None) -> di
         _runtime_source(WHEEL_RUNTIME),
         _wheel_glue_source(bool(config.get("trace_env"))),
         base64.b64encode(_verified_bytes(WHEEL_WASM, WHEEL_WASM_SHA256)).decode("ascii"),
-        http_bridge,
+        _android_http_callback(http_bridge),
         60_000,
     )
     return json.loads(str(result))
@@ -170,7 +183,7 @@ def _android_dfp(
         _runtime_source(WHEEL_RUNTIME), _runtime_source(DFP_RUNTIME), _dfp_sdk_source(),
         json.dumps(js_config, ensure_ascii=False, separators=(",", ":")),
         json.dumps({"cache": cache, "reusable": cache_reusable}, separators=(",", ":")),
-        http_bridge,
+        _android_http_callback(http_bridge),
         max(15_000, config["timeout_ms"] * 4 + 5_000),
     )
     return json.loads(str(result))

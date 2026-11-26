@@ -1,4 +1,4 @@
-"""SQLite account storage with Windows-user-bound encrypted credentials."""
+"""SQLite account storage with credentials encrypted by the local platform."""
 from __future__ import annotations
 
 import ctypes
@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 from threading import RLock
 
 
@@ -14,14 +15,23 @@ class LoginStorageError(Exception):
     pass
 
 
-def _dpapi(data: bytes, *, decrypt=False) -> bytes:
+def _crypt_credentials(data: bytes, *, decrypt=False) -> bytes:
     if os.environ.get('LINGXI_ANDROID') == '1':
         from java import jclass
         vault = jclass('cn.pppyl.lingxiworkspace.CredentialVault')
         return bytes(vault.decrypt(data) if decrypt else vault.encrypt(data))
+    if sys.platform == 'darwin':
+        from .macos_keychain import KeychainError, crypt_credentials
+        try:
+            return crypt_credentials(data, decrypt=decrypt)
+        except KeychainError as error:
+            raise LoginStorageError(str(error)) from error
     if os.name != 'nt':
-        raise LoginStorageError('当前系统不支持 Windows 登录态加密，账号仅保留在内存中。')
+        raise LoginStorageError('当前系统不支持本机凭据加密，账号仅保留在内存中。')
+    return _dpapi(data, decrypt=decrypt)
 
+
+def _dpapi(data: bytes, *, decrypt=False) -> bytes:
     class Blob(ctypes.Structure):
         _fields_ = [('size', wintypes.DWORD), ('data', ctypes.POINTER(ctypes.c_ubyte))]
 
@@ -59,8 +69,8 @@ def _dpapi(data: bytes, *, decrypt=False) -> bytes:
 class DatabaseLoginStorage:
     def __init__(self, path, *, protect=None, unprotect=None):
         self.path = Path(path)
-        self.protect = protect or _dpapi
-        self.unprotect = unprotect or (lambda data: _dpapi(data, decrypt=True))
+        self.protect = protect or _crypt_credentials
+        self.unprotect = unprotect or (lambda data: _crypt_credentials(data, decrypt=True))
         self.lock = RLock()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
