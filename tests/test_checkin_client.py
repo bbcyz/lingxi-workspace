@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import Mock
 from curl_cffi import requests
 
-from checkin_client import CheckinClient, CheckinError, ENTRY, FLASH_PRODUCT, PreparedFlash
+from features.checkin.client import CheckinClient, CheckinError, ENTRY, FLASH_PRODUCT, PreparedFlash
 from recharge.cmcc import SHANGHAI
 
 
@@ -83,6 +83,22 @@ class CheckinProtocolTests(unittest.TestCase):
     def mutations(self, session):
         return [call for call in session.calls if call[0] == 'POST' and
                 ('/domark' in call[1] or '/redeem' in call[1])]
+
+    def test_paused_flash_skips_its_official_query_without_interrupting_daily_signin(self):
+        session = ProtocolSession(signed=False)
+        client = self.client(session)
+        resume_at = datetime(2026, 11, 1, tzinfo=SHANGHAI)
+        state = client.inspect(flash_paused_until=resume_at)
+        self.assertEqual(state['today_state'], 'unsigned')
+        signed = client.signin(flash_paused_until=resume_at)
+        self.assertEqual(signed['today_state'], 'signed')
+        self.assertNotIn('flash_state', signed)
+        self.assertEqual(len(self.mutations(session)), 1)
+        self.assertFalse(any('/secConfig' in call[1] for call in session.calls))
+
+        elapsed_deadline = datetime.fromtimestamp(session.now / 1000, SHANGHAI)
+        self.assertEqual(client.inspect(flash_paused_until=elapsed_deadline)['flash_state'], 'available')
+        self.assertEqual(sum('/secConfig' in call[1] for call in session.calls), 1)
 
     def test_inspect_uses_real_calendar_and_never_mutates(self):
         session = ProtocolSession()
@@ -458,7 +474,7 @@ class PreparedFlashTests(unittest.TestCase):
         self.assertEqual(before_submit.call_count, 10)
 
     def test_changed_credentials_after_warmup_prevent_all_redeems(self):
-        from checkin_flash import run_flash_burst
+        from features.checkin.flash import run_flash_burst
         prepared = PreparedFlash(self.client, self.primary, copy.deepcopy(SNAPSHOT))
         self.addCleanup(prepared.close)
         prepared.prepare(3, None)

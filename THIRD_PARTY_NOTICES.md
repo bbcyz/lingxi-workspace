@@ -8,6 +8,7 @@ Component license texts are preserved in `_internal/third-party-notices`. Python
 - PyInstaller (bootloader exception): https://pyinstaller.org/en/stable/license.html
 - MiniRacer: https://github.com/bpcreech/PyMiniRacer
 - Lucide navigation icons (ISC, with Feather portions under MIT): https://github.com/lucide-icons/lucide. The bundled license is in `static/licenses/lucide.txt`.
+- imageio-ffmpeg (BSD-2-Clause): https://github.com/imageio/imageio-ffmpeg. Its license is collected with the Python distribution notices. The Windows FFmpeg subprocess used for sign-in media playback is a separate Gyan essentials build, licensed under GPLv3 or later. The full license is in `static/licenses/ffmpeg-gpl-3.0.txt`; its build configuration is available through `ffmpeg -version`. Upstream source and build information: https://ffmpeg.org/download.html and https://www.gyan.dev/ffmpeg/builds/. The Android client uses the system MediaPlayer instead.
 
 The release archive checksum is supplied separately as `SHA256SUMS.txt`.
 

@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from app_login import (
+from workspace.accounts.login import (
     APP_IT_HOST, AppCredentialError, AppLoginError, AppLoginSession, IV, IV_14, REQUEST_KEY, REQUEST_KEY_14,
     aes_decrypt, aes_encrypt, client_id, encrypt_phone, md5, wire_request,
 )
@@ -62,7 +62,7 @@ class AppLoginTests(unittest.TestCase):
         response=Mock(status_code=200,text='{"retCode":"000000","rspBody":{}}',headers=headers)
         transport=Mock();transport.post.return_value=response
         flow=AppLoginSession(cookie='JSESSIONID=original',transport=transport)
-        with patch('app_login.requests.Session') as create:
+        with patch('workspace.accounts.login.requests.Session') as create:
             flow.call('/first',{});flow.call('/second',{})
         create.assert_not_called();transport.close.assert_not_called()
         self.assertEqual(transport.post.call_count,2)
@@ -79,7 +79,7 @@ class AppLoginTests(unittest.TestCase):
         private = rsa.generate_private_key(public_exponent=65537, key_size=1024)
         public = private.public_key().public_numbers()
         stamp = datetime(2026, 10, 28, 3, 4, 5, tzinfo=timezone.utc)
-        with patch("app_login.Path.read_text", return_value=json.dumps({"n": str(public.n), "e": public.e})):
+        with patch("workspace.accounts.login.Path.read_text", return_value=json.dumps({"n": str(public.n), "e": public.e})):
             encoded = encrypt_phone("19900000000", stamp)
         clear = private.decrypt(base64.b64decode(encoded), padding.PKCS1v15())
         self.assertEqual(clear, b"leadeon1990000000020261028030405")

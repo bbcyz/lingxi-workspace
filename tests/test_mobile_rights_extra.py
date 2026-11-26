@@ -9,10 +9,10 @@ import unittest
 from unittest.mock import Mock,patch
 from urllib.parse import urlsplit,parse_qs
 
-from http_transport import requests,RequestException
-from mobile_rights_gateway import API_PATH,API_PATHS,GatewayError,page_signature,request_params
-from mobile_rights_points import PointClaim,PointClaimError,QUERY_PATH,CLAIM_PATH
-from mobile_rights_youth import NewYouthClient,XQNError
+from workspace.http_transport import requests,RequestException
+from features.mobile_rights.gateway import API_PATH,API_PATHS,GatewayError,page_signature,request_params
+from features.mobile_rights.points import PointClaim,PointClaimError,QUERY_PATH,CLAIM_PATH
+from features.mobile_rights.youth import NewYouthClient,XQNError
 from tests.test_mobile_rights import Response
 
 PROFILE={'parameter_name':'6daEXCun','compression_flag':1,'inner_key_hex':bytes(range(16)).hex(),
@@ -26,15 +26,15 @@ class ExtraProtocolTests(unittest.TestCase):
         self.folder=tempfile.TemporaryDirectory();self.addCleanup(self.folder.cleanup)
         self.config=Path(self.folder.name)/'gateway.json'
         self.config.write_text(json.dumps({'schema_version':2,'profiles':{path:deepcopy(PROFILE) for path in API_PATHS}}),encoding='utf-8')
-        setting=patch('mobile_rights_gateway.CONFIG_PATH',self.config);setting.start();self.addCleanup(setting.stop)
+        setting=patch('features.mobile_rights.gateway.CONFIG_PATH',self.config);setting.start();self.addCleanup(setting.stop)
         self.ss=requests.Session();self.addCleanup(self.ss.close);self.ss.cookies.set('WAP_SID','synthetic-auth',domain='wap.gz.10086.cn',path='/waps')
     def test_gateway_output_matches_independent_original_synthetic_vector(self):
-        with patch('mobile_rights_gateway.BUNDLED_CONFIG_PATH',Path(self.folder.name)/'not-present.json'):
+        with patch('features.mobile_rights.gateway.BUNDLED_CONFIG_PATH',Path(self.folder.name)/'not-present.json'):
             result=request_params(API_PATH,{'pageName':'index.html','channel':'E004','ajax_randomcode':'0.1234567890123456'})
         expected='Rp98IGlqEqqrqGWlrA3ocq9tcaaJkGZAlpEsmrVKmSGRDf7QopgI3lyci6ERIqBPcFYOZpAAWcI._H9rPHBEVI5WMHpPXUe29wKiTrvST3ILOx2H.NbR5N0qB_xvpq8ZIH6V0fDnS4K_vLLqzVX9viAnQsUc9rBsuVCZGezjSPAEqq12Gf96PG'
         self.assertEqual(result,{'6daEXCun':expected})
     def test_clean_install_uses_bundled_profiles_for_all_five_endpoints(self):
-        with patch('mobile_rights_gateway.CONFIG_PATH',Path(self.folder.name)/'missing/gateway.json'):
+        with patch('features.mobile_rights.gateway.CONFIG_PATH',Path(self.folder.name)/'missing/gateway.json'):
             for api_path in API_PATHS:
                 with self.subTest(api_path=api_path):
                     result=request_params(api_path,{'ajax_randomcode':'0.123'})

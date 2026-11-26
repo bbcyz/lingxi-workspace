@@ -4,10 +4,10 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
-import member_benefits_protocol as protocol_module
-from http_transport import RequestException
+import features.member_benefits.protocol as protocol_module
+from workspace.http_transport import RequestException
 
-from member_benefits_protocol import (
+from features.member_benefits.protocol import (
     DFP_STATE_SCOPE, EDGE_UA, GLUE_SHA256, PAGE_URL, WASM_SHA256, WHEEL_MIN_LIFETIME_MS,
     CampusProtocolError, CampusRiskProtocol,
 )
@@ -64,7 +64,7 @@ class MemberBenefitsProtocolTests(unittest.TestCase):
             protocol = self.protocol(directory)
             response = Mock(status_code=200, content=b'{"resultCode":-1006}',
                             json=Mock(return_value={'resultCode': -1006}))
-            with patch('member_benefits_protocol.requests.post', return_value=response) as send:
+            with patch('features.member_benefits.protocol.requests.post', return_value=response) as send:
                 result = protocol.prepare((), 't' * 36, 'ignored', '', order={
                     'skuId': 84095, 'activityId': 12502, 'smsCode': 'cipher',
                     'channelCode': 'P00000011939', 'selfChannelCode': 'P00000011939',
@@ -85,14 +85,14 @@ class MemberBenefitsProtocolTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             protocol = self.protocol(directory)
             response = Mock(status_code=200, content=b'')
-            with patch('member_benefits_protocol.requests.post', return_value=response):
+            with patch('features.member_benefits.protocol.requests.post', return_value=response):
                 result = protocol.prepare((), 't' * 36, '', '', order={'smsCode': 'cipher'})
             self.assertIsNone(result['order']['body'])
 
     def test_order_timeout_is_uncertain_and_never_retried(self):
         with TemporaryDirectory() as directory:
             protocol = self.protocol(directory)
-            with patch('member_benefits_protocol.requests.post',
+            with patch('features.member_benefits.protocol.requests.post',
                        side_effect=RequestException('fixture')) as send:
                 with self.assertRaises(CampusProtocolError) as raised:
                     protocol.prepare((), 't' * 36, '', '', order={'smsCode': 'cipher'})
@@ -122,7 +122,7 @@ class MemberBenefitsProtocolTests(unittest.TestCase):
                 record.assert_called_once_with()
                 return response
 
-            with patch('member_benefits_protocol.requests.post', side_effect=send_order) as send:
+            with patch('features.member_benefits.protocol.requests.post', side_effect=send_order) as send:
                 result = protocol.prepare((), 't' * 36, '', '', order={'smsCode': 'cipher'}, before_submit=record)
             self.assertEqual(result['order'], {'status': 429, 'body': None})
             send.assert_called_once()
@@ -130,7 +130,7 @@ class MemberBenefitsProtocolTests(unittest.TestCase):
 
             protocol = self.protocol(directory)
             record.side_effect = OSError('fixture storage unavailable')
-            with patch('member_benefits_protocol.requests.post') as send:
+            with patch('features.member_benefits.protocol.requests.post') as send:
                 with self.assertRaises(OSError):
                     protocol.prepare((), 't' * 36, '', '', order={'smsCode': 'cipher'}, before_submit=record)
             send.assert_not_called()
@@ -139,7 +139,7 @@ class MemberBenefitsProtocolTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             protocol = self.protocol(directory)
             response = Mock(status_code=200, content=b'null', json=Mock(return_value=None))
-            with patch('member_benefits_protocol.requests.post', return_value=response) as send:
+            with patch('features.member_benefits.protocol.requests.post', return_value=response) as send:
                 with self.assertRaises(CampusProtocolError) as error:
                     protocol.prepare((), 't' * 36, '', '', order={'smsCode': 'cipher'})
             self.assertTrue(error.exception.uncertain)
@@ -182,7 +182,7 @@ class MemberBenefitsProtocolTests(unittest.TestCase):
                                               wheel_runtime=wheel_runtime)
                 response = Mock(status_code=200, content=b'{"resultCode":-1006}',
                                 json=Mock(return_value={'resultCode': -1006}))
-                with patch('member_benefits_protocol.requests.post', return_value=response) as send:
+                with patch('features.member_benefits.protocol.requests.post', return_value=response) as send:
                     protocol.prepare((), 't' * 36, '', page, order={'smsCode': 'cipher'})
                 self.assertEqual(send.call_args.kwargs['headers']['Referer'], page)
                 self.assertEqual(wheel_runtime.call_args.args[2], page)

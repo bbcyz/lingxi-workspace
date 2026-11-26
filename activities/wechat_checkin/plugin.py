@@ -3,9 +3,23 @@ from threading import RLock
 
 from flask import Blueprint, jsonify, render_template, request
 from credential_cache import CredentialCache
-from activities.checkin_common.client import WebCheckinError
+from activities.checkin_common.client import WebCheckinClient, WebCheckinError, WebLoginManager
 from activities.checkin_common.scheduler import WebCheckinScheduler
-from .auth import SCOPE, WechatLoginManager, client_for
+
+SCOPE = 'wechat-checkin:1021122301'
+WECHAT_UA = ('Mozilla/5.0 (Linux; Android 16; 2210132C; wv) AppleWebKit/537.36 '
+             '(KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.143 Mobile Safari/537.36 '
+             'MicroMessenger/8.0.63 WeChat/arm64 Weixin NetType/WIFI Language/zh_CN')
+
+
+def client_for(provider, cache):
+    return WebCheckinClient(provider, credential_cache=cache, scope=SCOPE,
+                           channel='wechat', user_agent=WECHAT_UA)
+
+
+class WechatLoginManager(WebLoginManager):
+    def __init__(self, credentials, cache, **kwargs):
+        super().__init__(credentials,cache,scope=SCOPE,channel='wechat',user_agent=WECHAT_UA,**kwargs)
 
 
 class Controller:
@@ -39,24 +53,20 @@ class Controller:
 
 def register(app, credentials, accounts, storage):
     controller = Controller(credentials,accounts,storage)
-    blueprint = Blueprint('wechat_checkin',__name__,template_folder='../checkin_common/templates',
-        static_folder='../checkin_common/static',static_url_path='/activities/wechat-checkin/static')
+    blueprint = Blueprint('wechat_checkin',__name__,template_folder='templates',
+        static_folder='static',static_url_path='/activities/wechat-checkin/static')
 
     @blueprint.before_request
     def available():
         if controller.deleted:
             raise WebCheckinError('微信签到渠道已永久移除。','PLATFORM_DELETED',410)
 
-    @app.errorhandler(WebCheckinError)
+    @blueprint.errorhandler(WebCheckinError)
     def error_handler(error):
         value = {'error':str(error),'code':error.code}
         if hasattr(error,'retry_after'):
             value['retry_after'] = error.retry_after
         return jsonify(value),error.status
-
-    @app.context_processor
-    def template_flags():
-        return {'checkin_wechat_available':not controller.deleted}
 
     @blueprint.get('/checkin/wechat')
     def page():

@@ -9,11 +9,11 @@ from unittest.mock import MagicMock, Mock, patch
 
 from activities.coc_client import CocError
 from activities import net_age_wheel
-from credential_cache import CredentialCache
-from http_transport import requests
-from net_age import AI_IDS, APP_ENTRY, BIRTH_IDS, CHANNEL, ENTRY, FLOW_CODES, FLOW_IDS, MEMBER_ALREADY_CLAIMED, MEMBER_HISTORY_IDS, MEMBER_ID, PAGE_ID, WASM_PROFILE, NetAge, NetAgeClient, _config, _wrong_sms
+from workspace.accounts.credentials import CredentialCache
+from workspace.http_transport import requests
+from features.net_age.service import AI_IDS, APP_ENTRY, BIRTH_IDS, CHANNEL, ENTRY, FLOW_CODES, FLOW_IDS, MEMBER_ALREADY_CLAIMED, MEMBER_HISTORY_IDS, MEMBER_ID, PAGE_ID, WASM_PROFILE, NetAge, NetAgeClient, _config, _wrong_sms
 from recharge.cmcc import SHANGHAI
-from app_login import AppLoginSession
+from workspace.accounts.login import AppLoginSession
 
 
 class NetAgeTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class NetAgeTests(unittest.TestCase):
     def test_sms_requires_same_account_and_official_slider(self):
         client = Mock()
         client.inspect.return_value = {'rows': self.client.benefits(5, None, False, [], [])}
-        with patch('net_age.NetAgeClient', return_value=client):
+        with patch('features.net_age.service.NetAgeClient', return_value=client):
             preparation = self.service.begin('a', 'member', 'qq-music')
         self.assertTrue(preparation['needs_slider'])
         client.prepare_wheel.assert_called_once_with()
@@ -88,7 +88,7 @@ class NetAgeTests(unittest.TestCase):
             return {}
 
         client.post.side_effect = reply
-        with patch('net_age.NetAgeClient', return_value=client), patch('net_age._config', return_value={}):
+        with patch('features.net_age.service.NetAgeClient', return_value=client), patch('features.net_age.service._config', return_value={}):
             operation = self.service.begin('a', 'flow', 'monthly')['operation']
             self.service.verification('a', operation, 'sms', {})
             result = self.service.verification('a', operation, 'submit', {'code':'123456'})
@@ -121,7 +121,7 @@ class NetAgeTests(unittest.TestCase):
                 raise CocError('验证码输入有误', '10')
             return {}
         client.post.side_effect = reply
-        with patch('net_age.NetAgeClient', return_value=client), patch('net_age._config', return_value={}):
+        with patch('features.net_age.service.NetAgeClient', return_value=client), patch('features.net_age.service._config', return_value={}):
             prepared = self.service.begin('a', 'flow', 'monthly', probe=True)
         self.assertTrue(prepared['probe'])
         client.prepare_wheel.assert_called_once_with(flow_slide_provinces='', probe=True)
@@ -159,7 +159,7 @@ class NetAgeTests(unittest.TestCase):
                         raise CocError(message, code)
                     return {}
                 client.post.side_effect = reply
-                with patch('net_age.NetAgeClient', return_value=client), patch('net_age._config', return_value={}):
+                with patch('features.net_age.service.NetAgeClient', return_value=client), patch('features.net_age.service._config', return_value={}):
                     prepared = self.service.begin('a', 'flow', 'monthly', probe=True)
                 result = self.service.verification('a', prepared['operation'], 'probe', {})
                 self.assertEqual(result['passed'], passed)
@@ -182,8 +182,8 @@ class NetAgeTests(unittest.TestCase):
     def test_flow_probe_does_not_skip_an_official_slider_requirement(self):
         client = Mock(channel=CHANNEL, user={'provinceCode':'931'})
         client.inspect.return_value = {'rows':self.client.benefits(5, None, False, [], [])}
-        with patch('net_age.NetAgeClient', return_value=client), \
-                patch('net_age._config', return_value={'configContent_27':'931'}):
+        with patch('features.net_age.service.NetAgeClient', return_value=client), \
+                patch('features.net_age.service._config', return_value={'configContent_27':'931'}):
             with self.assertRaises(CocError) as blocked:
                 self.service.begin('a', 'flow', 'monthly', probe=True)
         self.assertEqual(blocked.exception.code, 'SLIDER_REQUIRED')
@@ -203,7 +203,7 @@ class NetAgeTests(unittest.TestCase):
                     return {}
                 client.post.side_effect = response
                 self.service.submissions = {}
-                with patch('net_age.NetAgeClient',return_value=client), patch('net_age._config',return_value={}):
+                with patch('features.net_age.service.NetAgeClient',return_value=client), patch('features.net_age.service._config',return_value={}):
                     prepared = self.service.begin('a','flow','monthly',probe=True)
                 if uncertain:
                     with self.assertRaises(CocError):
@@ -235,10 +235,10 @@ class NetAgeTests(unittest.TestCase):
                 return {'accessToken':'official-slider'}
             return {}
         client.post.side_effect=reply
-        with patch('net_age.NetAgeClient',return_value=client):
+        with patch('features.net_age.service.NetAgeClient',return_value=client):
             prepared=self.service.begin('a','member','youku',probe=True)
         operation=prepared['operation']
-        with patch('net_age.slide_position',return_value=100):
+        with patch('features.net_age.service.slide_position',return_value=100):
             for _ in range(2):
                 result=self.service.verification('a',operation,'probe',{})
                 self.assertTrue(result['passed'])
@@ -268,7 +268,7 @@ class NetAgeTests(unittest.TestCase):
                 raise CocError('活动太火爆了' if code=='1000008051' else '图验校验成功，短信验证码校验失败！',code)
             return {}
         client.post.side_effect=reply
-        with patch('net_age.NetAgeClient',return_value=client),patch('net_age.slide_position',return_value=125):
+        with patch('features.net_age.service.NetAgeClient',return_value=client),patch('features.net_age.service.slide_position',return_value=125):
             operation=self.service.begin('a','member','youku')['operation']
             self.service.verification('a',operation,'auto-slider',{})
             self.service.verification('a',operation,'sms',{})
@@ -292,7 +292,7 @@ class NetAgeTests(unittest.TestCase):
         client.inspect.return_value={'rows':self.client.benefits(5,None,False,[],[])}
         client.post.side_effect=lambda path,*a,**k: {'ground':'fixture','patch':'fixture','ordinate':10,
             'authToken':'challenge'} if path.endswith('getSliderImg') else {}
-        with patch('net_age.NetAgeClient',return_value=client),patch('net_age.slide_position',
+        with patch('features.net_age.service.NetAgeClient',return_value=client),patch('features.net_age.service.slide_position',
                 side_effect=CocError('识别失败','SLIDER_RECOGNITION')):
             operation=self.service.begin('a','member','youku')['operation']
             with self.assertRaises(CocError):self.service.verification('a',operation,'auto-slider',{})
@@ -440,7 +440,7 @@ class NetAgeTests(unittest.TestCase):
         response.read.return_value = b'{"code":"fixture-rejected"}'
         connection = Mock()
         connection.getresponse.return_value = response
-        with patch('net_age.HTTPSConnection',return_value=connection) as factory:
+        with patch('features.net_age.service.HTTPSConnection',return_value=connection) as factory:
             result = self.client.python_business_post('https://dev.coc.10086.cn/coc/activities/prize/templatePrize/new',
                 data='{"cocEnContent":"fixture"}',headers={'coc-aurora':'fixture'},
                 timeout=(8,20),allow_redirects=False)
@@ -473,7 +473,7 @@ class NetAgeTests(unittest.TestCase):
     def test_read_only_queries_reuse_the_preferred_flow_session_when_present(self):
         self.service.credentials = lambda _: {'id':'a','phone':'13800138000','primary_status':'login_required'}
         self.service.cache = Mock(load=Mock(return_value={'data':{'user':{'userId':'fixture'}}}))
-        with patch('net_age.NetAgeClient') as factory:
+        with patch('features.net_age.service.NetAgeClient') as factory:
             with self.service.connected('a'):
                 pass
         self.assertTrue(factory.call_args.kwargs['app_auth'])
@@ -506,8 +506,8 @@ class NetAgeTests(unittest.TestCase):
             return {}
 
         client.post.side_effect = reply
-        with patch('net_age.NetAgeClient', return_value=client), \
-                patch('net_age.time.monotonic', return_value=1000) as clock:
+        with patch('features.net_age.service.NetAgeClient', return_value=client), \
+                patch('features.net_age.service.time.monotonic', return_value=1000) as clock:
             operation = self.service.begin('a', 'member', 'bilibili')['operation']
             self.service.verification('a', operation, 'challenge', {})
             self.service.verification('a', operation, 'slider', {'position':20})
@@ -596,7 +596,7 @@ class NetAgeTests(unittest.TestCase):
                 raise CocError('图验校验成功，短信验证码校验失败！','1000009990')
             return {}
         client.post.side_effect=response
-        with patch('net_age.NetAgeClient',return_value=client),patch('net_age.slide_position',return_value=20):
+        with patch('features.net_age.service.NetAgeClient',return_value=client),patch('features.net_age.service.slide_position',return_value=20):
             begin=self.service.begin('a','birthday','cinema',probe=True)
             result=self.service.verification('a',begin['operation'],'probe',{})
         self.assertTrue(result['passed']);self.assertFalse(result['confirmed'])
@@ -621,7 +621,7 @@ class NetAgeTests(unittest.TestCase):
             if path.startswith('user/auth/') or path=='user/smsCode':raise AssertionError('phone probe must not request slider or SMS')
             return {}
         client.post.side_effect=response
-        with patch('net_age.NetAgeClient',return_value=client):
+        with patch('features.net_age.service.NetAgeClient',return_value=client):
             begin=self.service.begin('a','birthday','phone',probe=True)
             result=self.service.verification('a',begin['operation'],'probe',{})
         self.assertFalse(begin['needs_slider']);self.assertTrue(result['passed'])
@@ -637,7 +637,7 @@ class NetAgeTests(unittest.TestCase):
         client=Mock(user={'provinceCode':'851'},channel=CHANNEL)
         client.inspect.return_value={'rows':self.client.benefits(5,years,True,[],[])}
         client.orders.return_value=[{'activity_id':BIRTH_IDS[0],'skuCode':'unrecognized-product','createTime':'2026-11-18 10:00:00'}]
-        with patch('net_age.NetAgeClient',return_value=client):
+        with patch('features.net_age.service.NetAgeClient',return_value=client):
             begin=self.service.begin('a','birthday','cinema',probe=True)
             with self.assertRaises(CocError) as result:
                 self.service.verification('a',begin['operation'],'probe',{})
@@ -710,7 +710,7 @@ class NetAgeTests(unittest.TestCase):
             return {}
 
         client.post.side_effect = reply
-        with patch('net_age.NetAgeClient', return_value=client), patch('net_age.time.monotonic', return_value=1000) as clock:
+        with patch('features.net_age.service.NetAgeClient', return_value=client), patch('features.net_age.service.time.monotonic', return_value=1000) as clock:
             preparation = self.service.begin('a', 'birthday', 'cinema')
             operation = preparation['operation']
             self.assertTrue(preparation['needs_slider'])
@@ -755,7 +755,7 @@ class NetAgeTests(unittest.TestCase):
         self.assertTrue(row['retry_available'])
         self.assertNotIn('retry_offer_ids', row)
         self.assertNotIn('移动环境修复前', row['description'])
-        with patch('net_age.NetAgeClient', return_value=client):
+        with patch('features.net_age.service.NetAgeClient', return_value=client):
             cinema = self.service.begin('a', 'birthday', 'cinema', retry=True)
         self.assertTrue(cinema['needs_slider'])
 
@@ -770,7 +770,7 @@ class NetAgeTests(unittest.TestCase):
         row = self.service.status('a', client)['rows']['birthday']
         self.assertTrue(row['retry_available'])
         self.assertIn('old-trace', row['description'])
-        with patch('net_age.NetAgeClient', return_value=client):
+        with patch('features.net_age.service.NetAgeClient', return_value=client):
             preparation = self.service.begin('a', 'birthday', 'cinema', retry=True)
         self.assertTrue(preparation['needs_slider'])
         client.post.assert_called_once_with('activities/growth/verify/status', {}, recover=True)
@@ -798,7 +798,7 @@ class NetAgeTests(unittest.TestCase):
         session = transport.Session.return_value.__enter__.return_value
         session.get.return_value.text = 'var configData = ' + json.dumps({
             'pageId': PAGE_ID, 'configItemList': [{'configContent_27': '931'}]})
-        with patch('net_age.requests', transport):
+        with patch('features.net_age.service.requests', transport):
             self.assertEqual(_config(), {'configContent_27': '931'})
         session.get.assert_called_once()
 
@@ -994,7 +994,7 @@ class NetAgeTests(unittest.TestCase):
         client = Mock()
         client.connect.return_value = client
         client.client.cookies = requests.Cookies()
-        with patch('net_age.NetAgeClient', return_value=client):
+        with patch('features.net_age.service.NetAgeClient', return_value=client):
             with service.connected('a') as connected:
                 self.assertIs(connected, client)
                 self.assertIsNone(connected.client.cookies.get('_zw_kvani5r'))
@@ -1056,7 +1056,7 @@ class NetAgeTests(unittest.TestCase):
         self.assertFalse(rows['member']['available'])
         self.assertTrue(rows['member']['retry_available'])
 
-        with patch('net_age.NetAgeClient', return_value=client):
+        with patch('features.net_age.service.NetAgeClient', return_value=client):
             with self.assertRaises(CocError) as blocked:
                 self.service.begin('a','member','bilibili')
             self.assertEqual(blocked.exception.code, 'SUBMISSION_PENDING')
@@ -1114,7 +1114,7 @@ class NetAgeTests(unittest.TestCase):
         self.assertEqual(rejected['description'], '')
         self.assertTrue(rejected['recheck'])
         self.assertTrue(rejected['retry_available'])
-        with patch('net_age.NetAgeClient', return_value=client), patch('net_age._config', return_value={}):
+        with patch('features.net_age.service.NetAgeClient', return_value=client), patch('features.net_age.service._config', return_value={}):
             with self.assertRaises(CocError) as blocked:
                 self.service.begin('a', 'flow', 'monthly')
             self.assertEqual(blocked.exception.code, 'SUBMISSION_PENDING')
@@ -1137,7 +1137,7 @@ class NetAgeTests(unittest.TestCase):
             {'rows':self.client.benefits(5, None, False, [receipt], [])},
         ]
         self.service.mark('a', 'member', {'choice':'bilibili', 'period':'2026-11'})
-        with patch('net_age.NetAgeClient', return_value=client):
+        with patch('features.net_age.service.NetAgeClient', return_value=client):
             preparation = self.service.begin('a', 'member', 'bilibili', retry=True)
         operation = self.service.pending['a']
         operation.access_token = 'verified'
@@ -1159,7 +1159,7 @@ class NetAgeTests(unittest.TestCase):
             'response_code':'10','wasm_profile':'node-webview-v5','trace_id':'old-trace'})
         row = self.service.status('a',client)['rows']['member']
         self.assertTrue(row['retry_available'])
-        with patch('net_age.NetAgeClient',return_value=client) as factory:
+        with patch('features.net_age.service.NetAgeClient',return_value=client) as factory:
             prepared = self.service.begin('a','member','youku',retry=True)
         self.assertTrue(factory.call_args.kwargs['app_auth'])
         self.assertTrue(prepared['needs_slider'])
@@ -1315,7 +1315,7 @@ class NetAgeTests(unittest.TestCase):
         first = session([response('0',{'mobileMask':'138****0000','token':'market-token'}),count,prizes])
         second = session([count,prizes])
         expected = {'remaining':0, 'prizes':[{'name':'测试券','date':'2026-11-18'}]}
-        with patch('net_age.requests.Session', side_effect=[first,second]):
+        with patch('features.net_age.service.requests.Session', side_effect=[first,second]):
             self.assertEqual(self.service.surprise_details('a'), expected)
             self.assertEqual(self.service.surprise_details('a'), expected)
 

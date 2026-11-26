@@ -4,9 +4,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from login_storage import DatabaseLoginStorage
-from monthly_coupon_auth import MonthlyCouponAuthError
-from monthly_coupon_scheduler import MonthlyCouponScheduler, MonthlyTaskError
+from workspace.accounts.storage import DatabaseLoginStorage
+from features.monthly_coupon.auth import MonthlyCouponAuthError
+from features.monthly_coupon.scheduler import MonthlyCouponScheduler, MonthlyTaskError
 
 from recharge.cmcc import SHANGHAI
 

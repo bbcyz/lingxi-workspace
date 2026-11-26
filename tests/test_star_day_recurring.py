@@ -4,10 +4,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from login_storage import DatabaseLoginStorage
+from workspace.accounts.storage import DatabaseLoginStorage
 from recharge.cmcc import SHANGHAI
-from star_day_client import StarDayError
-from star_day_scheduler import StarDayScheduler
+from features.star_day.client import StarDayError
+from features.star_day.scheduler import StarDayScheduler
 from tests.test_star_day import Queue
 
 

@@ -30,7 +30,7 @@ public final class WorkspaceService extends Service {
             new Thread(() -> {
                 try {
                     if (!Python.isStarted()) Python.start(new AndroidPlatform(this));
-                    JSONObject result = new JSONObject(Python.getInstance().getModule("android_runtime").callAttr("start", getFilesDir().getAbsolutePath()).toString());
+                    JSONObject result = new JSONObject(Python.getInstance().getModule("workspace.clients.android_runtime").callAttr("start", getFilesDir().getAbsolutePath()).toString());
                     token = result.getString("token"); url = result.getString("url");
                 } catch (Exception failure) {
                     error = "本机服务启动失败，请关闭后重试。";
@@ -47,7 +47,7 @@ public final class WorkspaceService extends Service {
         stopForeground(true);
         super.onDestroy();
         new Thread(() -> {
-            try { if (Python.isStarted()) Python.getInstance().getModule("android_runtime").callAttr("stop"); }
+            try { if (Python.isStarted()) Python.getInstance().getModule("workspace.clients.android_runtime").callAttr("stop"); }
             finally { android.os.Process.killProcess(android.os.Process.myPid()); }
         }, "lingxi-stop").start();
     }

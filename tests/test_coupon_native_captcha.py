@@ -6,9 +6,9 @@ from unittest.mock import Mock,patch
 import cv2
 import numpy as np
 
-from coupon_device import APP_ID
-from coupon_native_captcha import RechargeCaptcha,RechargeCaptchaError,strip_order,restore_background,locate_slot,ALPHABET
-from http_transport import requests
+from features.coupons.device import APP_ID
+from features.coupons.native_captcha import RechargeCaptcha,RechargeCaptchaError,strip_order,restore_background,locate_slot,ALPHABET
+from workspace.http_transport import requests
 
 
 ORDER=[16,17,18,19,20,21,22,23,24,25,1,2,3,4,5,6,26,27,28,29,30,31,0,7,8,9,10,11,12,13,14,15]
@@ -33,7 +33,7 @@ def images(*,ambiguous=False,gap_x=190,near_shape=False):
 
 
 class SolverTests(unittest.TestCase):
-    def fixture(self,*,ambiguous_first=False,always_ambiguous=False,auto=False,rejected=False,rate=False,bad_binding=False,gap_x=190,image_latency=0):
+    def fixture(self,*,ambiguous_first=False,always_ambiguous=False,auto=False,rejected=False,rate=False,bad_binding=False,gap_x=190,image_latency=0,app_id=APP_ID):
         clear=images(gap_x=gap_x);uncertain=images(ambiguous=True);clock=[10000.0];calls=[];state={'apply':0}
         http=SimpleNamespace(headers={'User-Agent':'business-fixture','Origin':'https://touch.10086.cn'},cookies=requests.Cookies())
         http.cookies.set('stc-rrt-token','D'*40,domain='touch.10086.cn',path='/i',secure=True)
@@ -44,8 +44,8 @@ class SolverTests(unittest.TestCase):
                 state['apply']+=1;sid='sid-'+str(state['apply'])
                 if auto:return SimpleNamespace(status_code=200,json=lambda:{'success':True,'result':0,'token':'S'*53})
                 value={'success':True,'result':1,'type':0,'sid':sid,'o':KEY,'y':45,
-                    'p1':f'/api/p1?sid={sid}&ak={APP_ID}&imageType=0',
-                    'p2':f'/api/p1?sid={sid}&ak={APP_ID}&imageType=1'}
+                    'p1':f'/api/p1?sid={sid}&ak={app_id}&imageType=0',
+                    'p2':f'/api/p1?sid={sid}&ak={app_id}&imageType=1'}
                 if bad_binding:value['p1']='https://unrelated.invalid/image.png'
                 return SimpleNamespace(status_code=200,json=lambda:value)
             if '/api/p1?'in url:
@@ -86,7 +86,7 @@ class SolverTests(unittest.TestCase):
 
     def test_solver_preserves_sid_device_binding_and_returns_complete_94_character_callback(self):
         solver,http,calls=self.fixture();headers=http.headers
-        with patch('coupon_native_captcha.secrets.choice',return_value=1.1):result=solver.solve(http)
+        with patch('features.coupons.native_captcha.secrets.choice',return_value=1.1):result=solver.solve(http)
         self.assertEqual(result,'S'*53+':'+'D'*40);self.assertEqual(len(result),94)
         self.assertIs(http.headers,headers)
         verified=[r for r in calls if r[0]=='POST'];self.assertEqual(len(verified),1)
@@ -130,7 +130,7 @@ class SolverTests(unittest.TestCase):
 
     def test_right_hand_cutout_does_not_produce_an_out_of_bounds_slider_state(self):
         solver,http,calls=self.fixture(gap_x=246)
-        with patch('coupon_native_captcha.secrets.choice',side_effect=lambda values:values[0])as choice:
+        with patch('features.coupons.native_captcha.secrets.choice',side_effect=lambda values:values[0])as choice:
             self.assertEqual(solver.solve(http),'S'*53+':'+'D'*40)
         self.assertNotIn(.9,choice.call_args.args[0])
         body=next(row[2]['data']for row in calls if row[0]=='POST')
@@ -178,7 +178,7 @@ class SolverTests(unittest.TestCase):
         devices.prepare.assert_called_once_with('account-A',sdk)
 
     def test_c1_preparation_rejection_does_not_fall_back_to_native_or_request_a_challenge(self):
-        from coupon_recharge_device import RechargeDeviceError
+        from features.coupons.recharge_device import RechargeDeviceError
         solver,sdk,calls=self.fixture();sdk.close=Mock()
         solver.devices=Mock();solver.devices.prepare.side_effect=RechargeDeviceError('请求频繁','RISK_RATE_LIMITED',remote_status=-800)
         solver.session_factory=lambda:sdk
@@ -191,15 +191,32 @@ class SolverTests(unittest.TestCase):
         with self.assertRaises(RechargeCaptchaError)as error:solver.solve(http)
         self.assertEqual(error.exception.code,'CAPTCHA_IMAGE_FORMAT');self.assertEqual(len(calls),1)
 
+    def test_payment_app_and_risk_id_are_bound_to_images_and_verification(self):
+        solver,sdk,calls = self.fixture(app_id='payment-app')
+        sdk.close = Mock()
+        payment_devices = Mock()
+        solver.devices = Mock()
+        solver.devices.for_app.return_value = payment_devices
+        solver.session_factory = lambda:sdk
+        proof = solver.solve_payment(login_id='account-A', app_id='payment-app', risk_id='specific-payment-risk')
+        solver.devices.for_app.assert_called_once_with('payment-app')
+        payment_devices.prepare.assert_called_once_with('account-A',sdk)
+        self.assertEqual(proof,'S'*53+':'+'D'*40)
+        self.assertEqual(calls[0][2]['params']['ak'],'payment-app')
+        self.assertEqual(json.loads(calls[0][2]['params']['m']),{'riskId':'specific-payment-risk'})
+        verified=next(row for row in calls if row[0]=='POST')
+        self.assertEqual(verified[2]['data']['ak'],'payment-app')
+        sdk.close.assert_called_once()
+
     def test_android_module_import_does_not_require_desktop_cv2_or_numpy(self):
-        code="""import coupon_device,http_transport,os,builtins
+        code="""import features.coupons.device,workspace.http_transport,os,builtins
 os.environ['LINGXI_ANDROID']='1'
 original=builtins.__import__
 def import_module(name,*args,**kwargs):
  if name.split('.')[0] in ('cv2','numpy'):raise AssertionError('Desktop image module imported on Android')
  return original(name,*args,**kwargs)
 builtins.__import__=import_module
-import coupon_native_captcha
+import features.coupons.native_captcha as coupon_native_captcha
 print('loaded')
 """
         result=subprocess.run([sys.executable,'-X','utf8','-c',code],text=True,encoding='utf-8',capture_output=True,timeout=10)

@@ -1,10 +1,10 @@
 import hashlib
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from coupon_use import CouponUseManager, CouponUseError
-from coupon_alipay import CouponAlipayError
+from features.coupons.use import CouponUseManager, CouponUseError
+from features.coupons.alipay import CouponAlipayError
 
 
 class PendingOrderOwnershipTests(unittest.TestCase):
@@ -31,7 +31,7 @@ class PendingOrderOwnershipTests(unittest.TestCase):
         self.assertEqual(self.manager.pending('original-account'), [])
 
     def test_preparing_submitted_coupon_resumes_original_order_without_sso_or_resubmission(self):
-        with patch('coupon_use.CouponClient') as sso:
+        with patch('features.coupons.use.CouponClient') as sso:
             result = self.manager.prepare('original-account', self.coupon['id'])
         self.assertEqual(result['state'], 'payment_required')
         self.assertEqual(result['order']['order_id'], 'fixture-order')
@@ -40,8 +40,8 @@ class PendingOrderOwnershipTests(unittest.TestCase):
 
     def test_payment_uses_bound_original_order_and_filters_private_protocol_fields(self):
         self.manager.bind_pending('original-account', [self.coupon])
-        self.manager.data[self.key]['charge_amount'] = '30'
-        with patch('coupon_use.CouponAlipay') as gateway, patch('coupon_use.socket.socket') as route:
+        self.manager.data[self.key].update(charge_amount='30', credit_amount='35.00')
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
             route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
             gateway.return_value.get_payment.return_value = {
                 'payment_type': 'alipay_web', 'payment_url': 'https://mclient.alipay.com/cashierRoutePay.htm?awid=fixture',
@@ -51,12 +51,13 @@ class PendingOrderOwnershipTests(unittest.TestCase):
                 'fixture-order', expected_amount='3000', ip_address='192.168.1.2')
             gateway.return_value.query_order.assert_not_called()
         self.assertEqual(result['amount'], '30.00')
+        self.assertEqual(result['credit_amount'], '35.00')
         self.assertNotIn('payload', result)
         self.assertNotIn('pay_order_id', result)
 
     def test_legacy_amount_is_quoted_from_official_order_not_inferred_from_coupon(self):
         self.manager.bind_pending('original-account', [self.coupon])
-        with patch('coupon_use.CouponAlipay') as gateway, patch('coupon_use.socket.socket') as route:
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
             route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
             gateway.return_value.query_order.return_value = {'amount': '5000'}
             gateway.return_value.get_payment.return_value = {'payment_type': 'alipay_web',
@@ -68,7 +69,7 @@ class PendingOrderOwnershipTests(unittest.TestCase):
 
     def test_order_of_another_account_never_reaches_gateway(self):
         self.manager.bind_pending('original-account', [self.coupon])
-        with patch('coupon_use.CouponAlipay') as gateway:
+        with patch('features.coupons.use.CouponAlipay') as gateway:
             with self.assertRaises(CouponUseError):
                 self.manager.payment('another-account', 'fixture-order')
             gateway.assert_not_called()
@@ -77,9 +78,9 @@ class PendingOrderOwnershipTests(unittest.TestCase):
         self.manager.bind_pending('original-account', [self.coupon])
         old = {'state': 'payment_required', 'order_id': 'fixture-order', 'amount': '30.00',
                'payment_type': 'alipay_web', 'payment_url': 'https://mclient.alipay.com/cashierRoutePay.htm?awid=original'}
-        self.manager.data[self.key].update(charge_amount='30', payment=old)
-        with patch('coupon_use.CouponAlipay') as gateway, patch('coupon_use.socket.socket') as route:
-            self.assertEqual(self.manager.payment('original-account', 'fixture-order'), old)
+        self.manager.data[self.key].update(charge_amount='30', credit_amount='35.00', payment=old)
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
+            self.assertEqual(self.manager.payment('original-account', 'fixture-order'), {**old, 'credit_amount': '35.00'})
             gateway.assert_not_called()
             route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
             gateway.return_value.get_payment.side_effect = CouponAlipayError('未返回网页', 'ALIPAY_WEB_UNAVAILABLE')
@@ -92,7 +93,7 @@ class PendingOrderOwnershipTests(unittest.TestCase):
         self.manager.data[self.key]['charge_amount'] = '30'
         error = CouponAlipayError('订单已超时', 'ALIPAY_REJECTED', 409)
         error.safe = {'closed': True, 'return_code': 'SP13'}
-        with patch('coupon_use.CouponAlipay') as gateway, patch('coupon_use.socket.socket') as route:
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
             route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
             gateway.return_value.get_payment.side_effect = error
             result = self.manager.payment('original-account', 'fixture-order')
@@ -105,7 +106,7 @@ class PendingOrderOwnershipTests(unittest.TestCase):
         old = {'state': 'payment_required', 'order_id': 'fixture-order', 'amount': '30.00',
                'payment_type': 'alipay_web', 'payment_url': 'https://cash.open.chinaums.com/h5-cashier/#/old'}
         self.manager.data[self.key].update(charge_amount='30', payment=old)
-        with patch('coupon_use.CouponAlipay') as gateway, patch('coupon_use.socket.socket') as route, patch('coupon_use.CouponClient') as orders:
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route, patch('features.coupons.use.CouponClient') as orders:
             route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
             gateway.return_value.get_payment.return_value = {'payment_type': 'alipay_web',
                 'payment_url': 'https://mclient.alipay.com/cashierRoutePay.htm?awid=new', 'account_masked': '138****0000'}
@@ -122,7 +123,7 @@ class PendingOrderOwnershipTests(unittest.TestCase):
         error.challenge = {'app_id': 'provider-app', 'risk_id': 'provider-risk'}
         error.quote = {'order_id': 'fixture-order', 'amount': '3000', 'gateways': [{'gateway_id': 'ALIPAY'}],
                        'credential_revision': 1}
-        with patch('coupon_use.CouponAlipay') as gateway, patch('coupon_use.socket.socket') as route:
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
             route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
             gateway.return_value.get_payment.side_effect = error
             result = self.manager.payment('original-account', 'fixture-order')
@@ -148,7 +149,7 @@ class PendingOrderOwnershipTests(unittest.TestCase):
         self.manager.payment_challenges[('original-account', 'fixture-order')] = {
             'config': {'app_id': 'old-app', 'risk_id': 'old-risk'},
             'quote': {'credential_revision': 0}, 'expires': time.monotonic()+600}
-        with patch('coupon_use.CouponAlipay') as gateway, patch('coupon_use.socket.socket') as route:
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
             route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
             gateway.return_value.get_payment.return_value = {'payment_type': 'alipay_web',
                 'payment_url': 'https://mclient.alipay.com/cashierRoutePay.htm?awid=new',
@@ -159,12 +160,125 @@ class PendingOrderOwnershipTests(unittest.TestCase):
         self.assertEqual(result['state'], 'payment_required')
         self.assertEqual(self.manager.payment_challenges, {})
 
+    def payment_challenge(self):
+        error = CouponAlipayError('需要官方安全验证', 'ALIPAY_VERIFICATION_REQUIRED', 409)
+        error.challenge = {'app_id':'payment-app', 'risk_id':'bound-risk-id'}
+        error.quote = {'order_id':'fixture-order', 'amount':'3000', 'gateways':[{'gateway_id':'ALIPAY'}],
+                       'credential_revision':1}
+        return error
+
+    def test_payment_stage_automatically_solves_its_own_challenge_and_resumes_same_order(self):
+        self.manager.bind_pending('original-account', [self.coupon])
+        self.manager.data[self.key]['charge_amount'] = '30'
+        solver = Mock()
+        solver.solve_payment.return_value = 'official-payment-proof:payment-device'
+        self.manager.recharge_captcha = solver
+        challenge = self.payment_challenge()
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
+            route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
+            gateway.return_value.get_payment.side_effect = [challenge, {'payment_type':'alipay_web',
+                'payment_url':'https://mclient.alipay.com/cashier/mobilepay.htm?awid=fixture', 'account_masked':'138****0000'}]
+            result = self.manager.payment('original-account', 'fixture-order')
+            self.assertEqual(gateway.return_value.get_payment.call_count, 2)
+            gateway.return_value.get_payment.assert_called_with('fixture-order', expected_amount='3000',
+                ip_address='192.168.1.2', verify_key=solver.solve_payment.return_value, verified_quote=challenge.quote)
+            gateway.return_value.query_order.assert_not_called()
+        solver.solve_payment.assert_called_once_with(login_id='original-account', **challenge.challenge)
+        solver.solve.assert_not_called()
+        self.assertEqual(result['state'], 'payment_required')
+        self.assertEqual(self.manager.data[self.key]['order_id'], 'fixture-order')
+        self.assertNotIn(solver.solve_payment.return_value, json.dumps(self.manager.data))
+        self.assertFalse(self.manager.payment_running)
+
+    def test_real_gateway_protocol_keeps_quote_and_sends_automatic_token_as_verify_key(self):
+        from features.coupons.alipay import CouponAlipay
+        from tests.test_coupon_alipay import Session, SNAPSHOT, WEB
+        self.manager.bind_pending('original-account', [self.coupon])
+        self.manager.data[self.key]['charge_amount'] = '30'
+        self.manager.payment_credentials = lambda _:dict(SNAPSHOT)
+        session = Session()
+        session.amount = '3000'
+        session.begin.update(returnCode='CV4',riskAppId='payment-app',riskId='actual-order-risk')
+        self.manager.recharge_captcha = Mock()
+        def solve(**context):
+            self.assertEqual(context,{'login_id':'original-account','app_id':'payment-app','risk_id':'actual-order-risk'})
+            session.begin['returnCode'] = '0'
+            return 'verified-token:payment-c1-device'
+        self.manager.recharge_captcha.solve_payment.side_effect = solve
+        with patch('features.coupons.use.CouponAlipay',side_effect=lambda provider:CouponAlipay(provider,session_factory=lambda:session)), \
+             patch('features.coupons.use.socket.socket') as route, \
+             patch('features.coupons.alipay_h5.AlipayH5.payment_url',return_value=WEB):
+            route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2',50000)
+            result = self.manager.payment('original-account','fixture-order')
+        self.assertEqual([call['fields']['msgType'] for call in session.calls],['QueryPayTypeReq','SDKPayReq','SDKPayReq'])
+        self.assertEqual(session.calls[-1]['fields']['verifyKey'],'verified-token:payment-c1-device')
+        self.assertEqual(session.calls[-1]['fields']['orderId'],'fixture-order')
+        self.assertNotIn('fkToken',session.calls[-1]['fields'])
+        self.assertEqual(result['payment_url'],WEB)
+
+    def test_payment_repeated_verification_request_does_not_loop_or_reuse_a_proof(self):
+        self.manager.bind_pending('original-account', [self.coupon])
+        self.manager.data[self.key]['charge_amount'] = '30'
+        self.manager.recharge_captcha = Mock()
+        self.manager.recharge_captcha.solve_payment.return_value = 'one-use-proof'
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
+            route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
+            gateway.return_value.get_payment.side_effect = self.payment_challenge()
+            result = self.manager.payment('original-account', 'fixture-order')
+            self.assertEqual(result['state'], 'verification_required')
+            self.manager.payment('original-account', 'fixture-order', refresh=True)
+            self.assertEqual(gateway.return_value.get_payment.call_count, 2)
+        self.manager.recharge_captcha.solve_payment.assert_called_once()
+
+    def test_automatic_payment_verification_failure_preserves_order_and_reports_its_cause(self):
+        from features.coupons.native_captcha import RechargeCaptchaError
+        self.manager.bind_pending('original-account', [self.coupon])
+        self.manager.data[self.key]['charge_amount'] = '30'
+        self.manager.recharge_captcha = Mock()
+        self.manager.recharge_captcha.solve_payment.side_effect = RechargeCaptchaError('图片无法可靠识别', 'CAPTCHA_IMAGE_AMBIGUOUS')
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
+            route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
+            gateway.return_value.get_payment.side_effect = self.payment_challenge()
+            result = self.manager.payment('original-account', 'fixture-order')
+            self.assertEqual(result['message'], '图片无法可靠识别')
+            self.manager.payment('original-account', 'fixture-order')
+            gateway.return_value.get_payment.assert_called_once()
+        self.manager.recharge_captcha.solve_payment.assert_called_once()
+        self.assertEqual(self.manager.data[self.key]['state'], 'payment_required')
+
+    def test_concurrent_payment_queries_share_one_verification_and_keep_login_bound(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        self.manager.bind_pending('original-account', [self.coupon])
+        self.manager.data[self.key]['charge_amount'] = '30'
+        self.manager.recharge_captcha = Mock()
+        entered, release = Event(), Event()
+        def solve(**kwargs):
+            entered.set()
+            if not release.wait(3):raise AssertionError('没有释放测试中的验证请求')
+            return 'one-proof'
+        self.manager.recharge_captcha.solve_payment.side_effect = solve
+        with patch('features.coupons.use.CouponAlipay') as gateway, patch('features.coupons.use.socket.socket') as route:
+            route.return_value.__enter__.return_value.getsockname.return_value = ('192.168.1.2', 50000)
+            gateway.return_value.get_payment.side_effect = [self.payment_challenge(), {'payment_type':'alipay_web',
+                'payment_url':'https://mclient.alipay.com/cashier/mobilepay.htm?awid=fixture', 'account_masked':'138****0000'}]
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(self.manager.payment, 'original-account', 'fixture-order')
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(self.manager.busy_login('original-account'))
+                self.assertFalse(self.manager.busy_login('another-account'))
+                second = executor.submit(self.manager.payment, 'original-account', 'fixture-order')
+                release.set()
+                self.assertEqual(first.result(3), second.result(3))
+            self.assertEqual(gateway.return_value.get_payment.call_count, 2)
+        self.manager.recharge_captcha.solve_payment.assert_called_once()
+
     def test_token_from_before_relogin_is_rejected_without_reaching_gateway(self):
         import time
         self.manager.bind_pending('original-account', [self.coupon])
         self.manager.payment_challenges[('original-account', 'fixture-order')] = {
             'config': {}, 'quote': {'credential_revision': 0}, 'expires': time.monotonic()+600}
-        with patch('coupon_use.CouponAlipay') as gateway:
+        with patch('features.coupons.use.CouponAlipay') as gateway:
             with self.assertRaises(CouponUseError) as caught:
                 self.manager.payment('original-account', 'fixture-order', captcha_token='old-token')
             self.assertEqual(caught.exception.code, 'PAYMENT_CAPTCHA_EXPIRED')

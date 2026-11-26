@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from flask import Flask
-from navigation_status import failure_counts, register_navigation_status
+from workspace.navigation_status import failure_counts, register_navigation_status
 from recharge.cmcc import SHANGHAI
 
 NOW = datetime(2026, 11, 6, 12, tzinfo=SHANGHAI)
@@ -98,8 +98,8 @@ class NavigationCountTests(unittest.TestCase):
         pool.remember('18200000001','UID=private; JSESSIONID=private',{},'private-token',name='private-name')
         with (patch.object(app.extensions['checkin_scheduler'],'status',side_effect=AssertionError('would refresh')),
               patch.object(app.extensions['monthly_coupon_scheduler'],'status',side_effect=AssertionError('would refresh')),
-              patch('app_login.AppLoginSession.call',side_effect=AssertionError('would authenticate')),
-              patch('http_transport.requests.Session',side_effect=AssertionError('would request upstream'))):
+              patch('workspace.accounts.login.AppLoginSession.call',side_effect=AssertionError('would authenticate')),
+              patch('workspace.http_transport.requests.Session',side_effect=AssertionError('would request upstream'))):
             first=client.get('/api/navigation/issues')
             second=client.get('/api/navigation/issues')
         self.assertEqual(first.status_code,200)

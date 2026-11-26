@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from .cmcc import ActivityClient, ActivityError, ROOT
-from login_storage import LoginStorageError
+from workspace.accounts.storage import LoginStorageError
 from runtime_paths import RECHARGE_DATA_DIR
 
 

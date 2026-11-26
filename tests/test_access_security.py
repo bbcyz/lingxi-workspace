@@ -6,8 +6,8 @@ import tempfile
 import unittest
 
 from app import create_app
-from access_security import AccessError, AccessSecurity, RETRY_SECONDS, SESSION_SECONDS
-from login_storage import DatabaseLoginStorage
+from workspace.access_security import AccessError, AccessSecurity, RETRY_SECONDS, SESSION_SECONDS
+from workspace.accounts.storage import DatabaseLoginStorage
 
 PASSWORD = 'workspace-test-123'
 

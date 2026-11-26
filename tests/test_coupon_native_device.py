@@ -7,12 +7,12 @@ import unittest
 from unittest.mock import Mock
 import zipfile
 
-from http_transport import requests,RequestException
-from coupon_device import APP_ID
-from coupon_native_codec import request_packet,parse_message,message,xxtea_encrypt,xxtea_decrypt
-from coupon_native_device import NativeRechargeDevices,SERVER,SCOPE,TICKET_SECONDS,CLIENT_CONTEXT
-from coupon_recharge_device import RechargeDeviceError
-from login_storage import LoginStorageError
+from workspace.http_transport import requests,RequestException
+from features.coupons.device import APP_ID
+from features.coupons.native_codec import request_packet,parse_message,message,xxtea_encrypt,xxtea_decrypt
+from features.coupons.native_device import NativeRechargeDevices,SERVER,SCOPE,TICKET_SECONDS,CLIENT_CONTEXT
+from features.coupons.recharge_device import RechargeDeviceError
+from workspace.accounts.storage import LoginStorageError
 
 
 def response(token='native-fixture-ticket',code=0,status=200):

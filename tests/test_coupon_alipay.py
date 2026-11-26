@@ -9,9 +9,9 @@ from xml.etree import ElementTree as ET
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from coupon_alipay import (APP_ID, CouponAlipay, CouponAlipayError,
+from features.coupons.alipay import (APP_ID, CouponAlipay, CouponAlipayError,
                             RESPONSE_IV, RESPONSE_KEY, SIGN_SUFFIX)
-from http_transport import CurlHttpVersion, requests
+from workspace.http_transport import CurlHttpVersion, requests
 
 ORDER = 'fixture-existing-order'
 PHONE = '13800000000'
@@ -90,7 +90,7 @@ class CouponAlipayTests(unittest.TestCase):
         self.snapshot = deepcopy(SNAPSHOT)
         self.session = Session()
         self.client = CouponAlipay(lambda: deepcopy(self.snapshot), session_factory=lambda: self.session)
-        exchange = patch('alipay_h5.AlipayH5.payment_url', return_value=WEB)
+        exchange = patch('features.coupons.alipay_h5.AlipayH5.payment_url', return_value=WEB)
         self.exchange = exchange.start()
         self.addCleanup(exchange.stop)
 
@@ -117,7 +117,7 @@ class CouponAlipayTests(unittest.TestCase):
         self.assertTrue(self.session.closed)
 
     def test_begin_uses_exact_signed_field_sequence_and_returns_web_url(self):
-        with patch('coupon_alipay.datetime') as clock:
+        with patch('features.coupons.alipay.datetime') as clock:
             clock.now.return_value = datetime(2026, 10, 30, 12, 0, 0)
             result = self.payment()
         self.assertEqual(len(self.session.calls), 2)
@@ -171,7 +171,7 @@ class CouponAlipayTests(unittest.TestCase):
         self.assertEqual(len(self.session.calls), 2)
 
     def test_client_payment_parameters_are_not_converted_or_returned_as_a_link(self):
-        from alipay_h5 import AlipayH5Error
+        from features.coupons.alipay_h5 import AlipayH5Error
         self.session.begin.update(paymentRout='alipay')
         self.session.begin['payPrmts']['p1'] = 'client-only-parameters'
         self.exchange.side_effect = AlipayH5Error('订单参数无效', 'ALIPAY_H5_ORDER_INVALID')
@@ -189,7 +189,7 @@ class CouponAlipayTests(unittest.TestCase):
     def test_alipay_route_exchanges_sdk_parameters_for_official_web_cashier(self):
         self.session.begin.update(paymentRout='alipay')
         self.session.begin['payPrmts']['p1'] = 'private-signed-sdk-order'
-        with patch('alipay_h5.AlipayH5.payment_url', return_value='https://mclient.alipay.com/cashier/mobilepay.htm?awid=fixture') as exchange:
+        with patch('features.coupons.alipay_h5.AlipayH5.payment_url', return_value='https://mclient.alipay.com/cashier/mobilepay.htm?awid=fixture') as exchange:
             result = self.payment()
         exchange.assert_called_once_with('private-signed-sdk-order')
         self.assertEqual(result['payment_type'], 'alipay_web')

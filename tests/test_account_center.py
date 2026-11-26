@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app import create_app
-from app_login import AppLoginError, AppLoginSession
-from lingxi_scheduler import SHANGHAI
+from workspace.accounts.login import AppLoginError, AppLoginSession
+from features.lingxi.scheduler import SHANGHAI
 from recharge.accounts import AccountManager
 from recharge.cmcc import ActivityClient
 from recharge.scheduler import ClaimScheduler

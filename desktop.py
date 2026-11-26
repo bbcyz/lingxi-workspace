@@ -18,11 +18,14 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--data-dir',type=Path)
     parser.add_argument('--port',type=int)
-    parser.add_argument('--headless',action='store_true',help='Run the local service without a window (verification).')
+    interface=parser.add_mutually_exclusive_group()
+    interface.add_argument('--headless',action='store_true',help='Run the local service without the tray (verification).')
+    interface.add_argument('--open',dest='open_browser',action='store_true',help='Open the workbench in the default browser.')
     parser.add_argument('--quit',action='store_true',help='Exit this user data directory\'s running client.')
     options=parser.parse_args()
     if options.data_dir:os.environ['LINGXI_DATA_DIR']=str(options.data_dir.resolve())
-    from runtime_paths import ROOT,DATA_DIR,VERSION
+    from runtime_paths import ROOT,DATA_DIR,VERSION,prepare_runtime_data
+    if not options.quit:prepare_runtime_data()
     DATA_DIR.mkdir(parents=True,exist_ok=True)
     control_file=DATA_DIR/'desktop-instance.json'
 
@@ -38,18 +41,20 @@ def main():
     lock.seek(0);lock.write(b'1');lock.flush();lock.seek(0)
     try:msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
     except OSError:
+        lock.close()
         if json.loads(control_file.read_text('utf-8')).get('version')!=VERSION:
             ctypes.windll.user32.MessageBoxW(None,'请先从托盘退出旧版本客户端，再运行新版本。账号和任务会保留。','本地工具台',0x40)
             return
-        running_command('open');return
+        if options.open_browser:running_command('open')
+        return
     handler=RotatingFileHandler(DATA_DIR/'desktop.log',maxBytes=2*1024*1024,backupCount=2,encoding='utf-8')
     logging.basicConfig(handlers=[handler],level=logging.WARNING)
     from app import app
     app.config['SESSION_COOKIE_NAME']='lingxi_desktop_session'
     app.extensions['recharge_app'].config['SESSION_COOKIE_NAME']='lingxi_desktop_recharge_session'
     from flask import Response,jsonify,request
-    from network_access import create_http_server
-    from desktop_browser import DefaultBrowserWindow,wait_for_page
+    from workspace.network_access import create_http_server
+    from workspace.clients.desktop_browser import DefaultBrowserWindow,wait_for_page
     quit_event=threading.Event();token=secrets.token_urlsafe(32);icon=None
     def update_port(port):
         updated={**instance,'port':port}
@@ -122,10 +127,10 @@ def main():
     try:
         if options.headless:quit_event.wait()
         else:
-            open_window()
+            if options.open_browser:open_window()
             import pystray
             from PIL import Image
-            icon=pystray.Icon('LingxiWorkspace',Image.open(ROOT/'desktop_assets/app.ico'),
+            icon=pystray.Icon('LingxiWorkspace',Image.open(ROOT/'static/app.ico'),
                 f'本地工具台 v{VERSION}（关闭窗口后任务仍在运行）',pystray.Menu(
                     pystray.MenuItem('打开工具台',open_window,default=True),
                     pystray.MenuItem('打开数据目录',lambda *_:os.startfile(DATA_DIR)),

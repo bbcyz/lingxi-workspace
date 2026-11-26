@@ -1,4 +1,6 @@
 {
+  "format_version": 1,
+  "version": "1.0.0",
   "id": "wechat-checkin",
   "title": "微信渠道签到",
   "home": "/checkin/wechat",

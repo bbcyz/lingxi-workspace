@@ -14,9 +14,9 @@ from unittest.mock import Mock, patch
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from curl_cffi import requests
 
-from coupon_client import CouponClient, CouponError, GCM_KEY, _cbc_decrypt, _cbc_encrypt, _item
-from coupon_use import CouponUseError, CouponUseManager, PAYMENT_WINDOW_SECONDS
-from http_transport import CurlHttpVersion
+from features.coupons.client import CouponClient, CouponError, GCM_KEY, _cbc_decrypt, _cbc_encrypt, _item
+from features.coupons.use import CouponUseError, CouponUseManager, PAYMENT_WINDOW_SECONDS
+from workspace.http_transport import CurlHttpVersion
 
 
 PHONE = '13800000000'
@@ -185,7 +185,7 @@ class Session:
 
 class CouponUseTests(unittest.TestCase):
     def setUp(self):
-        logger = logging.getLogger('coupon_use')
+        logger = logging.getLogger(CouponUseManager.__module__)
         handler = logging.NullHandler()
         logger.addHandler(handler)
         previous_propagate = logger.propagate
@@ -194,7 +194,7 @@ class CouponUseTests(unittest.TestCase):
         self.addCleanup(setattr, logger, 'propagate', previous_propagate)
         self.storage = Storage()
         self.env = Environment(self.storage)
-        self.factory = patch('coupon_use.CouponClient', side_effect=self.env.client)
+        self.factory = patch('features.coupons.use.CouponClient', side_effect=self.env.client)
         self.factory.start()
         self.addCleanup(self.factory.stop)
         self.manager = CouponUseManager(self.env.provider, self.storage)
@@ -322,7 +322,7 @@ class CouponUseTests(unittest.TestCase):
             with self.subTest(family=family):
                 self.storage=Storage()
                 self.env=Environment(self.storage)
-                import coupon_use
+                import features.coupons.use as coupon_use
                 coupon_use.CouponClient.side_effect=self.env.client
                 if family=='flow':self.env.flow()
                 self.manager=CouponUseManager(self.env.provider,self.storage)
@@ -710,10 +710,10 @@ class CouponUseTests(unittest.TestCase):
         preview = self.prepare()
         operation = self.manager.operations[preview['operation_id']]
         operation.expires = 600
-        with patch('coupon_use.time.monotonic', return_value=400):
+        with patch('features.coupons.use.time.monotonic', return_value=400):
             self.manager.sms(operation.id)
         self.assertEqual(operation.expires, 1000)
-        with patch('coupon_use.time.monotonic', return_value=700):
+        with patch('features.coupons.use.time.monotonic', return_value=700):
             result = self.confirm(operation.id, sms_code='123456')
         self.assertEqual(result['state'], 'accepted')
 
@@ -733,7 +733,7 @@ class CouponUseTests(unittest.TestCase):
         fresh = self.prepare()
         pending = self.manager.operations[fresh['operation_id']]
         self.assertTrue(self.manager.busy_login(LOGIN))
-        with patch('coupon_use.time.monotonic', return_value=pending.expires):
+        with patch('features.coupons.use.time.monotonic', return_value=pending.expires):
             self.assertFalse(self.manager.busy_login(LOGIN))
 
     def test_exchange_validates_sms_before_sdk_and_keeps_validation_until_submission(self):
@@ -890,7 +890,7 @@ class CouponUseTests(unittest.TestCase):
     def test_500002_preserves_official_reason_but_redacts_submission_secrets(self):
         self.env.final_response = {'retCode': '500002',
             'retMsg': '参数错误 '+PHONE+' private-exchange-code private-session 123456 private-sms-serial'}
-        with self.assertLogs('coupon_use', level='WARNING') as diagnostic:
+        with self.assertLogs(CouponUseManager.__module__, level='WARNING') as diagnostic:
             result = self.exchange()
         self.assertIn('官方说明：参数错误', result['message'])
         for secret in (PHONE, 'private-exchange-code', 'private-session', '123456', 'private-sms-serial'):
@@ -1165,7 +1165,7 @@ class CouponUseTests(unittest.TestCase):
         self.assertEqual(len(self.env.final_calls), 1)
 
     def test_recharge_prepares_official_device_cookie_before_order_without_a_captcha_value(self):
-        from coupon_recharge_device import SERVER
+        from features.coupons.recharge_device import SERVER
         self.env.recharge()
         preview=self.prepare()
         self.assertEqual(self.env.sdk_calls,[])
@@ -1196,7 +1196,7 @@ class CouponUseTests(unittest.TestCase):
         self.assertEqual(len(self.env.final_calls),1)
 
     def test_native_device_path_keeps_the_same_operation_and_never_invents_a_captcha_token(self):
-        from coupon_native_device import NativeRechargeDevices
+        from features.coupons.native_device import NativeRechargeDevices
         self.env.recharge()
         self.env.snapshot['app_context']={'device_id':'registered-fixture-device'}
         native=NativeRechargeDevices(self.env.provider,self.storage)
@@ -1230,7 +1230,7 @@ class CouponUseTests(unittest.TestCase):
         self.assertEqual(len(self.env.final_calls),1);solver.solve.assert_called_once()
 
     def test_automatic_verification_rejection_closes_without_another_order_or_login(self):
-        from coupon_native_captcha import RechargeCaptchaError
+        from features.coupons.native_captcha import RechargeCaptchaError
         self.env.recharge();preview=self.prepare();self.env.final_response={'retCode':'531027'}
         solver=Mock();solver.solve.side_effect=RechargeCaptchaError('官方请求频繁','CAPTCHA_RATE_LIMITED',remote_code=429)
         self.manager.recharge_captcha=solver
@@ -1399,7 +1399,7 @@ class CouponUseTests(unittest.TestCase):
 
     def test_failed_native_context_completion_does_not_consume_a_new_proof_or_submit(self):
         from types import SimpleNamespace
-        from coupon_recharge_device import RechargeDeviceError
+        from features.coupons.recharge_device import RechargeDeviceError
         self.env.recharge();meta={'prepared':True,'reused':True,'provider':'m1','expires_at':10000}
         devices=SimpleNamespace(prepare=Mock(return_value=meta),complete_registered_client=Mock())
         self.manager.recharge_devices=devices

@@ -5,9 +5,9 @@ from threading import Thread
 import unittest
 from unittest.mock import patch
 
-from http_transport import requests
-from star_day_auth import StarDaySessionCache, star_day_session
-from star_day_client import StarDayClient
+from workspace.http_transport import requests
+from features.star_day.auth import StarDaySessionCache, star_day_session
+from features.star_day.client import StarDayClient
 
 
 class TransportTests(unittest.TestCase):
@@ -44,8 +44,8 @@ class TransportTests(unittest.TestCase):
             with star_day_session(lambda:snapshot,cache=cache,allow_login=False) as (client,_):
                 protocol._request(client,path,**kwargs)
                 return client
-        with patch('star_day_auth.AppLoginSession.from_credentials') as primary:
-            with patch('star_day_client.BASE', 'http://127.0.0.1:'+str(server.server_port)):
+        with patch('features.star_day.auth.AppLoginSession.from_credentials') as primary:
+            with patch('features.star_day.client.BASE', 'http://127.0.0.1:'+str(server.server_port)):
                 with ThreadPoolExecutor(max_workers=1) as first, ThreadPoolExecutor(max_workers=1) as second:
                     initialized=first.submit(send,'/claim',data={'productId':'3913','receivePhone':'','channelCode':'75628','isRandom':'0','sourece':'2'}).result()
                     reused=second.submit(send,'/sign',json={'sspid':'75628'}).result()

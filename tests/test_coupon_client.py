@@ -9,10 +9,10 @@ from threading import Event
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from curl_cffi import requests
 
-from coupon_client import (APP_TOKEN_PATH, ENTRY, GCM_KEY, ORIGIN, CouponClient, CouponError,
+from features.coupons.client import (APP_TOKEN_PATH, ENTRY, GCM_KEY, ORIGIN, CouponClient, CouponError,
                            _cbc_encrypt, _payload)
-from credential_cache import CredentialCache
-from app_login import AppCredentialError
+from workspace.accounts.credentials import CredentialCache
+from workspace.accounts.login import AppCredentialError
 
 SNAPSHOT = {'phone': '13800000000', 'cookie': 'JSESSIONID=fake-app-secret',
             'profile': {}, 'credential_revision': 1}
@@ -300,7 +300,7 @@ class CouponApiTests(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(data))
 
     def test_invalid_query_and_missing_or_expired_account_never_start_sso(self):
-        with patch('coupon_client.AppLoginSession.from_credentials') as flow:
+        with patch('features.coupons.client.AppLoginSession.from_credentials') as flow:
             self.assertEqual(self.client.get('/api/coupons?state=wrong').status_code, 400)
             self.assertEqual(self.client.get('/api/coupons?page=0').status_code, 400)
             self.assertEqual(self.client.get('/api/coupons?sort=wrong').status_code, 400)
@@ -338,7 +338,7 @@ class CouponApiTests(unittest.TestCase):
         def query(*args,**kwargs):
             snapshot={**self.pool.credentials(record.id),'id':record.id}
             self.app.extensions['coupon_uses'].app_session_recover(record.id,snapshot)
-        with patch('coupon_use.CouponClient.query',side_effect=query),patch('app.AppLoginSession.refresh',
+        with patch('features.coupons.use.CouponClient.query',side_effect=query),patch('app.AppLoginSession.refresh',
                 side_effect=AppCredentialError('官方要求重新验证（420000）',code='420000',login_required=True)),\
                 patch('app.AppLoginSession.send_sms') as sms:
             response=self.client.get('/api/coupons?login_id='+record.id)
@@ -375,7 +375,7 @@ class CouponApiTests(unittest.TestCase):
             'own': {'login_id': record.id, 'state': 'payment_required', 'order_id': 'own-order'},
             'other': {'login_id': 'other-account', 'state': 'payment_required', 'order_id': 'other-order'},
             'closed': {'login_id': record.id, 'state': 'closed', 'order_id': 'closed-order'}})
-        with patch('coupon_client.AppLoginSession.from_credentials') as flow:
+        with patch('features.coupons.client.AppLoginSession.from_credentials') as flow:
             response = self.client.get('/api/coupons/pending?login_id='+record.id)
             self.assertEqual(response.status_code, 200)
             self.assertEqual([r['order_id'] for r in response.get_json()['pending_orders']], ['own-order'])
@@ -389,7 +389,7 @@ class CouponApiTests(unittest.TestCase):
                    'payment_type': 'alipay_web', 'payment_url': 'https://mclient.alipay.com/cashierRoutePay.htm?awid=fixture'}
         self.app.extensions['coupon_uses'].data['own'] = {'login_id': record.id,
             'state': 'payment_required', 'order_id': 'own-order', 'payment': payment}
-        with patch('coupon_use.CouponAlipay') as gateway:
+        with patch('features.coupons.use.CouponAlipay') as gateway:
             response = self.client.post('/api/coupons/use/payment', json={'login_id': record.id,'order_id':'own-order'})
             self.assertEqual(response.status_code, 200)
             data = response.get_json()

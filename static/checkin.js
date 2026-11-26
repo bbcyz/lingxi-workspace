@@ -7,8 +7,12 @@ const accountStateNames={login_required:'需重新登录',restoring:'正在恢�
 const stateNames={waiting:'待执行',preparing:'准备中',running:'执行中',receiving:'接收结果',stopping:'正在停止',success:'已完成',completed:'已完成',signed:'今日已签到',already_signed:'今日已签到',unsigned:'今日未签到',not_signed:'今日未签到',pending:'今日未签到',unknown:'未查询',not_configured:'未配置',skipped:'本次未参与',available:'当前可参与',already_claimed:'本月已领取',unavailable:'暂不可参与',failed:'执行失败',error:'执行失败',cancelled:'已停止',stopped:'已停止',login_required:'需要重新登录',retry:'等待重试',interrupted:'已中断'};
 const activeStates=new Set(['preparing','running','receiving','stopping']);
 const signedStates=new Set(['signed','already_signed','success','completed']);
-let model={accounts:[],tasks:[],products:[]},loaded=false,loading=false,working=false,filter='all',view='accounts',manual=false,historyId='',historyAccountId='';
+let model={accounts:[],tasks:[],products:[]},loaded=false,loading=false,working=false,manual=false,historyId='',historyAccountId='';
+let selectedAccountId=sessionStorage.getItem('checkin:selected-account')||'',accountSignature='',refreshPending=false,pendingOfficial='';
+let taskSignature='';
 const selectedTasks=new Set();
+const selectedAccount=()=>model.accounts.find(account=>account.id===selectedAccountId);
+window.CheckinAccount={current:selectedAccount,accounts:()=>model.accounts};
 const dateFormat=value=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
 function node(tag,className='',text){const element=document.createElement(tag);element.className=className;if(text!==undefined)element.textContent=text;return element;}
 function checkinResultMessage(message) {
@@ -27,65 +31,197 @@ function badge(state,label=stateNames[state]||state){
   return node('span','checkin-badge '+tone,label);
 }
 function stoppable(task){return task.enabled||activeStates.has(task.state);}
-function visibleTasks(){const query=$('checkin-search').value.trim().toLocaleLowerCase();return model.tasks.filter(task=>(filter==='all'||task.kind===filter)&&`${task.account_name} ${task.phone_masked}`.toLocaleLowerCase().includes(query));}
-function accountGroup(account){
-  if(signedStates.has(account.today_state))return 'signed';
-  if(['unsigned','not_signed','pending'].includes(account.today_state))return 'unsigned';
-  if(['login_required','failed','error'].includes(account.today_state)||account.status==='login_required')return 'attention';
-  return 'unknown';
+function accountTasks(){return model.tasks.filter(task=>task.login_id===selectedAccountId);}
+function renderAccountSelector(){
+  const signature=JSON.stringify(model.accounts.map(a=>[a.id,a.name,a.phone_masked,a.status]));
+  if(signature!==accountSignature){
+    accountSignature=signature;
+    $('checkin-pool-count').textContent=model.accounts.length;
+    $('checkin-account-list').replaceChildren(...(model.accounts.length?model.accounts.map(account=>{
+      const button=node('button','workspace-account-jump');button.type='button';button.dataset.checkinAccount=account.id;
+      button.append(node('strong','',account.name||account.phone_masked),node('small','',account.phone_masked));
+      if(account.status!=='active')button.append(node('small','checkin-account-unavailable',accountStateNames[account.status]||'暂不可用'));
+      button.addEventListener('click',()=>selectAccount(account.id));return button;
+    }):[node('p','workspace-account-index-empty','请先在账号管理中登录。')]));
+    $('checkin-account-select').replaceChildren(...model.accounts.map(account=>{
+      const option=node('option','',`${account.name||account.phone_masked} · ${account.phone_masked}${account.status==='active'?'':' · 需登录'}`);
+      option.value=account.id;return option;
+    }));
+  }
+  for(const button of $('checkin-account-list').querySelectorAll('button')){
+    button.setAttribute('aria-pressed',String(button.dataset.checkinAccount===selectedAccountId));button.disabled=working;
+  }
+  $('checkin-account-select').value=selectedAccountId;$('checkin-account-select').disabled=working||!model.accounts.length;
 }
-function renderAccounts(){
-  const query=$('checkin-search').value.trim().toLocaleLowerCase(),state=$('checkin-account-state-filter').value;
-  const accounts=model.accounts.filter(account=>(state==='all'||accountGroup(account)===state)&&`${account.name} ${account.phone_masked}`.toLocaleLowerCase().includes(query));
-  $('checkin-account-total').textContent=model.accounts.length;
-  $('checkin-account-summary').textContent=`显示 ${accounts.length} / ${model.accounts.length} 个账号 · 已确认今日签到 ${model.accounts.filter(account=>signedStates.has(account.today_state)).length} 个`;
-  const rows=accounts.map(account=>{
-    const row=node('tr'),identity=node('td'),today=node('td'),month=node('td'),recent=node('td'),automatic=node('td'),flash=node('td'),operations=node('td');
-    identity.setAttribute('data-workspace-account',account.id);
-    identity.setAttribute('data-workspace-phone',account.phone_masked||'');
-    identity.append(node('strong','',account.name||account.phone_masked),node('small','',account.phone_masked));
-    if(account.status!=='active')identity.append(node('small','checkin-account-unavailable',accountStateNames[account.status]||'暂不可用'));
-    const todayState=account.today_state||'unknown';
-    today.append(signedStates.has(todayState)?node('span','checkin-badge success','今日已签到'):badge(todayState));
-    month.append(node('strong','checkin-month-count',account.month_count===null||account.month_count===undefined?'—':account.month_count+' 次'));
-    const signinMessage = checkinResultMessage(account.signin_message);
-    recent.append(node('time','checkin-account-last-time',dateFormat(account.last_signin_at)),node('p','checkin-task-message checkin-account-result',signinMessage||'暂无签到结果'));
-    recent.title=signinMessage;
-    automatic.append(node('span','checkin-badge '+(account.signin_enabled?'success':'ended'),account.signin_enabled===true?'已开启':account.signin_enabled===false?'未开启':'未读取'));
-    const signTask=model.tasks.find(task=>task.login_id===account.id&&task.kind==='signin'&&task.enabled);
-    if(signTask?.next_run_at)automatic.append(node('small','','下次 '+dateFormat(signTask.next_run_at)));
-    const flashTask=model.tasks.find(task=>task.login_id===account.id&&task.kind==='flash');
-    const claimedLabel=account.flash_state==='already_claimed'&&account.flash_kind==='weekly'?'本周已领取':undefined;
-    if(account.flash_kind)flash.append(node('strong','',flashNames[account.flash_kind]));
-    flash.append(badge(account.flash_state||'unknown',claimedLabel));
-    if(flashTask?.enabled&&flashTask.next_run_at)flash.append(node('small','','下次检查 '+dateFormat(flashTask.next_run_at)));
-    else if(account.flash_enabled===false)flash.append(node('small','','自动秒杀未开启'));
-    if(account.flash_message){const text=checkinResultMessage(account.flash_message),message=node('p','checkin-task-message checkin-account-result',text);message.title=text;flash.append(message);}
-    const actions=node('div','checkin-row-actions');
-    const sign=node('button','secondary','签到');sign.type='button';sign.disabled=working||account.status!=='active'||signedStates.has(todayState);sign.addEventListener('click',()=>openEditor(true,account.id));actions.append(sign);
-    const configure=node('button','quiet','配置');configure.type='button';configure.disabled=working||account.status!=='active';configure.addEventListener('click',()=>openEditor(false,account.id));actions.append(configure);
-    const history=node('button','quiet','记录');history.type='button';history.addEventListener('click',()=>openAccountHistory(account.id));actions.append(history);
-    if(account.status==='login_required'){const login=node('button','quiet','重新登录');login.type='button';login.setAttribute('data-account-window','');login.dataset.accountRelogin=account.id;actions.append(login);}
-    operations.append(actions);row.append(identity,today,month,recent,automatic,flash,operations);return row;
-  });
-  if(!rows.length){const row=node('tr'),cell=node('td','checkin-empty',model.accounts.length?'当前筛选下没有账号。':'共享账号池为空，请先从左侧“账号管理”登录账号。');cell.colSpan=7;row.append(cell);rows.push(row);}
-  $('checkin-accounts').replaceChildren(...rows);
+function selectAccount(id){
+  if(working)return;
+  selectedAccountId=id;sessionStorage.setItem('checkin:selected-account',id);selectedTasks.clear();
+  render();window.dispatchEvent(new CustomEvent('checkin-account-changed',{detail:{id}}));refresh(id);
 }
-function updateSelection(){
-  const visible=visibleTasks().filter(stoppable),count=visible.filter(task=>selectedTasks.has(task.id)).length;
-  $('checkin-select-tasks').checked=visible.length>0&&visible.length===count;
-  $('checkin-select-tasks').indeterminate=count>0&&count<visible.length;
-  $('checkin-select-tasks').disabled=!visible.length||working;
-  $('checkin-selected-tasks').textContent=`已选 ${selectedTasks.size} 项`;
-  $('checkin-stop-tasks').disabled=!selectedTasks.size||working;$('checkin-clear-tasks').hidden=!selectedTasks.size;
+function renderAccount(account, tasks, flashTitle) {
+  const summary = $('checkin-accounts');
+  summary.hidden = !account;
+  $('checkin-account-empty').hidden = !!account;
+  $('checkin-open-history').disabled = !account;
+  const login = $('checkin-relogin');
+  login.hidden = account?.status !== 'login_required';
+  if (!account) {
+    $('checkin-account-empty').textContent = '请先从“账号管理”登录并选择账号。';
+    return;
+  }
+
+  summary.dataset.loginId = account.id;
+  const todayState = account.today_state || 'unknown';
+  const today = badge(signedStates.has(todayState) ? 'signed' : todayState);
+  const todayLabel = today.textContent;
+  $('checkin-today-state').replaceChildren(today);
+  $('checkin-month-count').textContent = account.month_count ?? '—';
+  $('checkin-month-unit').hidden = account.month_count == null;
+
+  const lastSignin = $('checkin-last-signin');
+  lastSignin.dateTime = account.last_signin_at || '';
+  lastSignin.textContent = dateFormat(account.last_signin_at);
+  const signinMessage = checkinResultMessage(account.signin_message);
+  const signinResult = $('checkin-signin-result');
+  signinResult.hidden = !signinMessage || signinMessage === todayLabel;
+  signinResult.textContent = signinResult.hidden ? '' : signinMessage;
+
+  $('checkin-account-flash-title').textContent = flashNames[account.flash_kind] || flashTitle;
+  const weeklyClaimed = account.flash_state === 'already_claimed' && account.flash_kind === 'weekly';
+  const flash = badge(account.flash_state || 'unknown', weeklyClaimed ? '本周已领取' : undefined);
+  $('checkin-flash-state').replaceChildren(flash);
+  const flashMessage = checkinResultMessage(account.flash_message);
+  const flashResult = $('checkin-flash-result');
+  flashResult.hidden = !flashMessage || flashMessage === flash.textContent;
+  flashResult.textContent = flashResult.hidden ? '' : flashMessage;
+
+  login.dataset.accountRelogin = account.id;
+  const nextSession = Date.parse(account.flash_next_at) > Date.parse(model.server_time) ? account.flash_next_at : '';
+  const flashTask = tasks.find(task => task.kind === 'flash');
+  const nextCheckIsSession = !!nextSession && Date.parse(nextSession) === Date.parse(flashTask?.next_run_at);
+  const showNextSession = !!nextSession && !nextCheckIsSession;
+  $('checkin-flash-session').hidden = !showNextSession;
+  $('checkin-flash-next').dateTime = showNextSession ? nextSession : '';
+  $('checkin-flash-next').textContent = showNextSession ? dateFormat(nextSession) : '';
+
+  renderTasks(tasks, {
+    signin: [todayLabel, signinMessage],
+    flash: [flash.textContent, flashMessage],
+  }, nextCheckIsSession);
+}
+
+function updateSelection() {
+  const available = accountTasks().filter(stoppable);
+  const count = selectedTasks.size;
+  const selectAll = $('checkin-select-tasks');
+  $('checkin-select-all').hidden = available.length < 2;
+  selectAll.checked = count > 0 && count === available.length;
+  selectAll.indeterminate = count > 0 && count < available.length;
+  selectAll.disabled = working || !available.length;
+  $('checkin-selection-bar').hidden = !count;
+  $('checkin-selected-tasks').textContent = `已选 ${count} 项`;
+  $('checkin-stop-tasks').disabled = working || !count;
+  $('checkin-clear-tasks').disabled = working;
+  for (const check of $('checkin-accounts').querySelectorAll('input[type=checkbox]')) {
+    check.checked = selectedTasks.has(check.value);
+  }
+}
+
+function renderTasks(tasks, officialResults, nextCheckIsSession) {
+  const signature = JSON.stringify([selectedAccountId, working, officialResults, nextCheckIsSession, tasks.map(({history, ...task}) => task)]);
+  if (signature === taskSignature) return;
+  taskSignature = signature;
+
+  for (const kind of ['signin', 'flash']) {
+    const card = $('checkin-' + kind + '-task');
+    const task = tasks.find(item => item.kind === kind);
+    if (!task) {
+      card.replaceChildren(node('p', 'checkin-result-note', '未配置自动任务'));
+      continue;
+    }
+    card.dataset.taskId = task.id;
+    const name = taskName(task);
+    const heading = node('div', 'checkin-automation-heading');
+    const title = node('div', 'checkin-auto-state');
+    title.append(node('span', '', '自动安排'));
+    const isActive = activeStates.has(task.state);
+    const isPaused = !isActive && !!task.paused_until;
+    const pauseLabel = task.flash_kind === 'weekly' ? '本周暂停' : '本月暂停';
+    title.append(isActive ? badge(task.state) : isPaused ? badge('stopped', pauseLabel)
+      : badge(task.enabled ? 'waiting' : 'stopped', task.enabled ? '已开启' : '已关闭'));
+    heading.append(title);
+    const canStop = stoppable(task);
+    if (canStop) {
+      const label = node('label', 'checkin-task-select');
+      const check = node('input');
+      check.type = 'checkbox';
+      check.value = task.id;
+      check.disabled = working;
+      check.setAttribute('aria-label', `选择${name}任务`);
+      check.addEventListener('change', () => {
+        if (check.checked) selectedTasks.add(task.id);
+        else selectedTasks.delete(task.id);
+        updateSelection();
+      });
+      label.append(check, '选择');
+      heading.append(label);
+    }
+
+    const schedule = node('dl', 'checkin-activity-details');
+    const nextLabel = isPaused ? '恢复检查' : kind === 'flash' && nextCheckIsSession ? '下场检查' : '下次检查';
+    const previousLabel = kind === 'flash' ? '上次检查' : '上次执行';
+    const lastState = stateNames[task.state];
+    const officialLabels = officialResults[kind];
+    for (const [label, value] of [[nextLabel, task.next_run_at], [previousLabel, task.last_run_at]]) {
+      if (!value) continue;
+      const row = node('div');
+      const time = node('time', '', dateFormat(value));
+      time.dateTime = value;
+      const detail = node('dd');
+      detail.append(time);
+      if (label === previousLabel && !isActive && lastState &&
+          !['waiting', 'stopped', 'already_signed', 'already_claimed'].includes(task.state) &&
+          !officialLabels.includes(lastState)) {
+        detail.append(node('span', 'checkin-run-state', task.state === 'skipped' ? '已跳过' : lastState));
+      }
+      row.append(node('dt', '', label), detail);
+      schedule.append(row);
+    }
+    const content = [heading, schedule];
+    if (task.kind === 'flash') {
+      content.push(node('p', 'checkin-result-note', `最多 ${task.burst_count ?? 40} 次 · 间隔 ${(task.burst_interval ?? 0.05) * 1000} 毫秒`));
+    }
+    const result = checkinResultMessage(task.message);
+    const repeatsOfficialResult = officialLabels.includes(result) ||
+      (task.state === 'already_signed' && officialLabels[0] === '今日已签到' && result === '今日已签到，已核对官方记录');
+    if (result && !repeatsOfficialResult) content.push(node('p', 'checkin-result-note', result));
+
+    const actions = node('div', 'checkin-row-actions');
+    const history = node('button', 'quiet', '记录');
+    history.type = 'button';
+    history.setAttribute('aria-label', `查看${name}记录`);
+    history.addEventListener('click', () => openHistory(task.id));
+    actions.append(history);
+    if (canStop) {
+      const stop = node('button', 'quiet', '停止');
+      stop.type = 'button';
+      stop.disabled = working;
+      stop.setAttribute('aria-label', `停止${name}任务`);
+      stop.addEventListener('click', () => stopTasks([task.id]));
+      actions.append(stop);
+    }
+    card.replaceChildren(...content, actions);
+  }
 }
 function render(){
-  $('checkin-accounts-view').hidden=view!=='accounts';$('checkin-account-controls').hidden=view!=='accounts';
-  $('checkin-tasks-view').hidden=view!=='tasks';$('checkin-task-controls').hidden=view!=='tasks';$('checkin-selection-bar').hidden=view!=='tasks';
-  renderAccounts();
-  const shown=visibleTasks(),available=new Set(shown.filter(stoppable).map(task=>task.id));
+  renderAccountSelector();
+  const current=selectedAccount();
+  const shown=accountTasks(),available=new Set(shown.filter(stoppable).map(task=>task.id));
   for(const id of selectedTasks)if(!available.has(id))selectedTasks.delete(id);
-  $('checkin-task-count').textContent=model.tasks.length;
+  $('checkin-sign-now').disabled=working||!current||current.status!=='active'||signedStates.has(current.today_state);
+  $('checkin-sign-batch').disabled=working||!model.accounts.some(account=>account.status==='active');
+  $('checkin-configure').disabled=working||!loaded;
+  $('checkin-dashboard').setAttribute('aria-busy',String(!!current?.refreshing));
   const calibration=model.calibration,clockStatus=$('checkin-clock-status');
   if(clockStatus)clockStatus.textContent=calibration?.state==='ready'
     ? `已统一校时 · 服务器相对本机 ${calibration.offset_ms>=0?'+':''}${calibration.offset_ms.toFixed(1)} 毫秒 · ${calibration.samples} 个有效样本 · 所有账号共用`
@@ -101,54 +237,35 @@ function render(){
   }
   const flashKinds=[...new Set(model.accounts.map(account=>account.flash_kind).filter(Boolean))];
   const flashTitle=flashKinds.length===1?flashNames[flashKinds[0]]:'签到秒杀';
-  const flashHeading=$('checkin-flash-title');
-  if(flashHeading){
-    flashHeading.textContent=flashTitle;
-    $('checkin-account-flash-title').textContent=flashTitle;
-    $('checkin-flash-config-title').textContent=flashTitle;
-    const nextFlash=model.accounts.map(account=>account.flash_next_at).filter(at=>Date.parse(at)>Date.parse(model.server_time)).sort()[0];
-    $('checkin-flash-schedule').textContent=(flashKinds.length===1&&flashKinds[0]==='weekly'?'1 元话费券 · 每周限抢 1 次。':'按官方场次执行。')
-      +(nextFlash?' 下场 '+dateFormat(nextFlash):'');
-  }
-  document.querySelector('[data-checkin-kind="flash"]').textContent=flashTitle;
-  for(const [kind,id] of [['signin','checkin-sign-count'],['flash','checkin-flash-count']]){
-    const count=new Set(model.tasks.filter(task=>task.kind===kind&&task.enabled).map(task=>task.login_id)).size;
-    $(id).textContent=count?`已开启 ${count} 个账号`:'尚未配置';
-  }
-  const rows=shown.map(task=>{
-    const row=node('tr'),selection=node('td','checkin-task-selection'),check=node('input');check.type='checkbox';
-    check.checked=selectedTasks.has(task.id);check.disabled=!stoppable(task)||working;
-    check.setAttribute('aria-label',`选择 ${task.account_name} 的${taskName(task)}任务`);
-    check.addEventListener('change',()=>{if(check.checked)selectedTasks.add(task.id);else selectedTasks.delete(task.id);updateSelection();});selection.append(check);
-    const account=node('td');account.append(node('strong','',task.account_name),node('small','',task.phone_masked));
-    const kind=node('td');kind.append(node('strong','',taskName(task)),node('small','',task.kind==='flash'?'按官方场次':'每天一次'));
-    if(task.kind==='flash')kind.append(node('small','',`${task.burst_count??40} 次 · ${(task.burst_interval??0.05)*1000} 毫秒`));
-    const time=node('td','checkin-task-time');time.append(node('time','',dateFormat(task.next_run_at).replace(' ','\n')));
-    if(task.last_run_at)time.append(node('small','','上次 '+dateFormat(task.last_run_at)));
-    const state=node('td');state.append(badge(task.state));
-    const result=node('td'),text=checkinResultMessage(task.message),message=node('p','checkin-task-message',text||'暂无结果');message.title=text;result.append(message);
-    const operations=node('td'),actions=node('div','checkin-row-actions');
-    const history=node('button','secondary','记录');history.type='button';history.addEventListener('click',()=>openHistory(task.id));actions.append(history);
-    const edit=node('button','quiet','调整');edit.type='button';edit.disabled=working||activeStates.has(task.state);edit.addEventListener('click',()=>openEditor(false,task.login_id));actions.append(edit);
-    if(stoppable(task)){const stop=node('button','quiet','停止');stop.type='button';stop.disabled=working;stop.addEventListener('click',()=>stopTasks([task.id]));actions.append(stop);}
-    operations.append(actions);row.append(selection,account,kind,time,state,result,operations);return row;
-  });
-  if(!rows.length){const row=node('tr'),cell=node('td','checkin-empty',model.tasks.length?'当前筛选下没有任务。':'有效账号会自动启用每日任务，可在“配置自动任务”中统一设置时间。');cell.colSpan=7;row.append(cell);rows.push(row);}
-  $('checkin-tasks').replaceChildren(...rows);updateSelection();
+  $('checkin-flash-config-title').textContent=flashTitle;
+  const coverage=kind=>new Set(model.tasks.filter(task=>task.kind===kind&&task.enabled).map(task=>task.login_id)).size;
+  $('checkin-coverage').textContent=`自动任务覆盖范围 · 签到 ${coverage('signin')} 个账号 · 秒杀 ${coverage('flash')} 个账号`;
+  renderAccount(current, shown, flashTitle);
+  updateSelection();
   if($('checkin-history').open)renderHistory();
 }
-async function refresh(){
-  if(loading)return loaded;loading=true;
+async function refresh(loginId=''){
+  if(loading){refreshPending=true;if(loginId)pendingOfficial=loginId;return loaded;}loading=true;
   try{
-    model=await api('/api/checkin/status');loaded=true;render();
+    model=await api('/api/checkin/status'+(loginId?'?login_id='+encodeURIComponent(loginId):''));loaded=true;
+    const previous=selectedAccountId;
+    if(!model.accounts.some(account=>account.id===selectedAccountId))selectedAccountId=(model.accounts.find(account=>account.status==='active')||model.accounts[0])?.id||'';
+    sessionStorage.setItem('checkin:selected-account',selectedAccountId);render();
+    if(previous!==selectedAccountId){
+      selectedTasks.clear();window.dispatchEvent(new CustomEvent('checkin-account-changed',{detail:{id:selectedAccountId}}));
+      if(selectedAccountId){refreshPending=true;pendingOfficial=selectedAccountId;}
+    }
     $('checkin-warning').textContent=model.warning||'';$('checkin-warning').hidden=!model.warning;
-    $('checkin-sync-state').textContent='北京时间 · 最近同步 '+dateFormat(model.server_time);
-    $('checkin-configure').disabled=false;$('checkin-sign-now').disabled=false;return true;
+    $('checkin-sync-state').textContent=selectedAccount()?.refreshing?'正在核对当前账号的官方进度…':'北京时间 · 最近同步 '+dateFormat(model.server_time);
+    return true;
   }catch(error){
     feedback('读取失败：'+error.message);$('checkin-sync-state').textContent='本地服务暂未连接';
-    if(!loaded){$('checkin-sign-count').textContent='暂无法读取';$('checkin-flash-count').textContent='暂无法读取';$('checkin-account-summary').textContent='暂时无法读取各账号状态';for(const id of ['checkin-accounts','checkin-tasks']){const row=node('tr'),cell=node('td','checkin-empty','暂时无法读取，稍后点击“刷新”重试。');cell.colSpan=7;row.append(cell);$(id).replaceChildren(row);}}
+    if(!loaded){
+      $('checkin-coverage').textContent='暂无法读取自动任务的账号覆盖范围';
+      $('checkin-account-empty').textContent='暂时无法读取，稍后点击“刷新”重试。';
+    }
     return false;
-  }finally{loading=false;}
+  }finally{loading=false;if(refreshPending){const next=pendingOfficial;refreshPending=false;pendingOfficial='';queueMicrotask(()=>refresh(next));}}
 }
 function updateAccountSelection(){
   const available=[...$('checkin-account-options').querySelectorAll('input:not(:disabled)')],selected=available.filter(input=>input.checked).length;
@@ -163,16 +280,19 @@ function updateConfiguration(){
   const product=model.products.find(item=>item.id===$('checkin-product').value);
   $('checkin-product-description').textContent=product?productLabel(product)+(product.available===false?'。当前状态仅供参考，已预约任务仍按设置发送。':''):$('checkin-product').value===model.automation.product_id?'执行时取得当期领取参数，按预约设置发送。':'选择商品后显示其消耗和参与条件。';
 }
-async function openEditor(asManual=false,loginId=''){
+async function openEditor(asManual=false,loginId='',batch=false){
   if(working||!await refresh())return;
   manual=asManual;$('checkin-form').reset();$('checkin-form-error').hidden=true;
   $('checkin-editor-title').textContent=manual?'立即签到':'配置自动任务';
-  $('checkin-editor-description').textContent=manual?'使用所选共享账号执行免费签到，每个账号今天最多一次。':'应用于所有有效账号，新增或恢复登录后自动纳入，无需选择账号。';
-  $('checkin-account-heading').hidden=!manual;$('checkin-account-options').hidden=!manual;
+  if(manual&&!batch)loginId=loginId||selectedAccountId;
+  const target=model.accounts.find(account=>account.id===loginId);
+  if(manual&&!batch&&target?.status!=='active'){feedback('请先恢复当前账号的登录。');return;}
+  $('checkin-editor-description').textContent=manual?(batch?'选择本次需要签到的账号，每个账号今天最多一次。':`本次为 ${target.name||target.phone_masked}（${target.phone_masked}）签到。`):'应用于所有有效账号，新增或恢复登录后自动纳入，无需选择账号。';
+  $('checkin-account-heading').hidden=!manual||!batch;$('checkin-account-options').hidden=!manual||!batch;
   $('checkin-automatic-options').hidden=manual;$('checkin-save').textContent=manual?'开始签到':'保存自动任务';
   const options=model.accounts.map(account=>{
     const label=node('label','checkin-account-option'),check=node('input');check.type='checkbox';check.value=account.id;
-    check.disabled=account.status!=='active';check.checked=!check.disabled&&account.id===loginId;
+    check.disabled=account.status!=='active';check.checked=!check.disabled&&(batch||account.id===loginId);
     const text=node('span');text.append(node('strong','',account.name||account.phone_masked),node('small','',account.phone_masked));
     if(check.disabled)text.append(node('small','checkin-account-unavailable',accountStateNames[account.status]||'暂不可用'));
     label.append(check,text);return label;
@@ -197,7 +317,7 @@ async function openEditor(asManual=false,loginId=''){
   updateAccountSelection();updateConfiguration();$('checkin-editor').showModal();
 }
 async function stopTasks(ids){
-  if(working)return;working=true;updateSelection();
+  if(working)return;working=true;render();
   try{const result=await api('/api/checkin/tasks/stop',{ids});feedback(result.message||'停止请求已提交，正在执行的结果会保留。',true);await refresh();}
   catch(error){feedback(error.message);}
   finally{working=false;render();}
@@ -228,14 +348,17 @@ function renderHistory(){
     }
     return row;
   });
-  if(!rows.length)rows.push(node('p','checkin-empty',historyAccountId?'尚无客户端执行记录，最近签到结果可在账号表中查看。':'还没有执行记录。'));
+  if(!rows.length)rows.push(node('p','checkin-empty',historyAccountId?'尚无客户端执行记录，最近结果可在签到情况中查看。':'还没有执行记录。'));
   const scroll=$('checkin-history').scrollTop;$('checkin-history-body').replaceChildren(...rows);$('checkin-history').scrollTop=scroll;
 }
 function openHistory(id){historyAccountId='';historyId=id;renderHistory();$('checkin-history').showModal();}
 function openAccountHistory(id){historyId='';historyAccountId=id;renderHistory();$('checkin-history').showModal();}
 $('checkin-configure').disabled=true;$('checkin-sign-now').disabled=true;
-$('checkin-refresh').addEventListener('click',refresh);
-$('checkin-configure').addEventListener('click',()=>openEditor());$('checkin-sign-now').addEventListener('click',()=>openEditor(true));
+$('checkin-refresh').addEventListener('click',()=>refresh(selectedAccountId));
+$('checkin-configure').addEventListener('click',()=>openEditor());$('checkin-sign-now').addEventListener('click',()=>openEditor(true,selectedAccountId));
+$('checkin-sign-batch').addEventListener('click',()=>openEditor(true,'',true));
+$('checkin-open-history').addEventListener('click',()=>openAccountHistory(selectedAccountId));
+$('checkin-account-select').addEventListener('change',event=>selectAccount(event.target.value));
 $('checkin-account-options').addEventListener('change',updateAccountSelection);
 $('checkin-select-accounts').addEventListener('click',()=>{const options=[...$('checkin-account-options').querySelectorAll('input:not(:disabled)')],check=!options.every(input=>input.checked);options.forEach(input=>input.checked=check);updateAccountSelection();});
 for(const id of ['checkin-signin-enabled','checkin-flash-enabled','checkin-product'])$(id).addEventListener('change',updateConfiguration);
@@ -255,12 +378,14 @@ $('checkin-form').addEventListener('submit',async event=>{
 });
 $('checkin-editor').addEventListener('cancel',event=>{if(working)event.preventDefault();});
 document.querySelectorAll('[data-checkin-close]').forEach(button=>button.addEventListener('click',()=>{if(!working)$(button.dataset.checkinClose).close();}));
-document.querySelectorAll('[data-checkin-kind]').forEach(button=>button.addEventListener('click',()=>{filter=button.dataset.checkinKind;selectedTasks.clear();document.querySelectorAll('[data-checkin-kind]').forEach(item=>{item.classList.toggle('selected',item===button);item.setAttribute('aria-pressed',String(item===button));});render();}));
-document.querySelectorAll('[data-checkin-view]').forEach(button=>button.addEventListener('click',()=>{view=button.dataset.checkinView;selectedTasks.clear();document.querySelectorAll('[data-checkin-view]').forEach(item=>{item.classList.toggle('selected',item===button);item.setAttribute('aria-pressed',String(item===button));});render();}));
-$('checkin-account-state-filter').addEventListener('change',render);
-$('checkin-search').addEventListener('input',()=>{selectedTasks.clear();render();});
-$('checkin-select-tasks').addEventListener('change',event=>{for(const task of visibleTasks().filter(stoppable)){if(event.target.checked)selectedTasks.add(task.id);else selectedTasks.delete(task.id);}render();});
-$('checkin-clear-tasks').addEventListener('click',()=>{selectedTasks.clear();render();});
+$('checkin-select-tasks').addEventListener('change',event=>{
+  selectedTasks.clear();
+  if(event.target.checked){
+    for(const task of accountTasks().filter(stoppable))selectedTasks.add(task.id);
+  }
+  updateSelection();
+});
+$('checkin-clear-tasks').addEventListener('click',()=>{selectedTasks.clear();updateSelection();});
 $('checkin-stop-tasks').addEventListener('click',()=>stopTasks([...selectedTasks]));
-window.addEventListener('accounts-changed',refresh);window.addEventListener('focus',refresh);
-refresh();setInterval(()=>{if(!document.hidden&&!working)refresh();},5000);
+window.addEventListener('accounts-changed',()=>refresh(selectedAccountId));window.addEventListener('focus',()=>refresh());
+refresh(selectedAccountId);setInterval(()=>{if(!document.hidden&&!working)refresh();},5000);

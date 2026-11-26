@@ -5,7 +5,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from coupon_use import CouponUseManager, CouponUseError, PAYMENT_WINDOW_SECONDS
+from features.coupons.use import CouponUseManager, CouponUseError, PAYMENT_WINDOW_SECONDS
 from tests.test_coupon_use import Storage
 
 
@@ -17,7 +17,7 @@ KEY = hashlib.sha256(json.dumps([LOGIN,COUPON],separators=(',',':')).encode()).h
 class PendingExpiryTests(unittest.TestCase):
     def setUp(self):
         self.now = 2000000000
-        clock = patch('coupon_use.time.time',side_effect=lambda:self.now)
+        clock = patch('features.coupons.use.time.time',side_effect=lambda:self.now)
         clock.start();self.addCleanup(clock.stop)
         self.record = {'state':'payment_required','order_id':'old-order','login_id':LOGIN,
             'coupon_id':COUPON,'coupon_name':'6元话费加赠券','charge_amount':'30.00',
@@ -50,7 +50,7 @@ class PendingExpiryTests(unittest.TestCase):
         self.assertEqual(before['expires_in'],PAYMENT_WINDOW_SECONDS-100)
         manager.payment_challenges[(LOGIN,'old-order')] = {'private':'captcha-context'}
         self.now = before['expires_at']
-        with patch('coupon_use.CouponAlipay') as gateway:
+        with patch('features.coupons.use.CouponAlipay') as gateway:
             self.assertEqual(manager.pending(LOGIN),[])
             self.assertEqual(manager.payment(LOGIN,'old-order')['state'],'closed')
             self.assertEqual(manager.payment(LOGIN,'old-order',refresh=True)['state'],'closed')
@@ -61,7 +61,7 @@ class PendingExpiryTests(unittest.TestCase):
     def test_newer_live_order_keeps_original_deadline_and_saved_link(self):
         manager = self.manager()
         deadline = manager.pending(LOGIN)[0]['expires_at']
-        with patch('coupon_use.CouponAlipay') as gateway:
+        with patch('features.coupons.use.CouponAlipay') as gateway:
             self.assertEqual(manager.payment(LOGIN,'old-order'),self.record['payment'])
             self.now += 50
             self.assertEqual(manager.pending(LOGIN)[0]['expires_at'],deadline)
@@ -86,7 +86,7 @@ class PendingExpiryTests(unittest.TestCase):
     def test_expired_order_cannot_be_resumed_by_prepare_or_replaced_without_reading_official_coupon(self):
         self.record['created_at'] = self.now-PAYMENT_WINDOW_SECONDS
         manager = self.manager()
-        with patch('coupon_use.CouponClient') as wallet:
+        with patch('features.coupons.use.CouponClient') as wallet:
             wallet.return_value._session.side_effect = CouponUseError('卡券已不存在','COUPON_NOT_FOUND',404)
             with self.assertRaises(CouponUseError) as caught:manager.prepare(LOGIN,COUPON)
             self.assertEqual(caught.exception.code,'COUPON_NOT_FOUND')
@@ -97,7 +97,7 @@ class PendingExpiryTests(unittest.TestCase):
     def test_closed_order_is_still_isolated_from_another_account(self):
         self.record['created_at'] = self.now-PAYMENT_WINDOW_SECONDS
         manager = self.manager()
-        with patch('coupon_use.CouponAlipay') as gateway:
+        with patch('features.coupons.use.CouponAlipay') as gateway:
             with self.assertRaises(CouponUseError) as caught:manager.payment('another-account','old-order')
             self.assertEqual(caught.exception.code,'ORDER_NOT_FOUND')
             gateway.assert_not_called()

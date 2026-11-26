@@ -14,15 +14,15 @@ from unittest.mock import Mock, patch
 from cryptography.fernet import Fernet
 from curl_cffi import requests
 
-from credential_cache import CredentialCache, token_expiry
-from login_storage import DatabaseLoginStorage
-from checkin_client import CheckinClient, CheckinError
-from monthly_coupon_auth import guizhou_session
-from monthly_coupon_client import MonthlyCouponClient, MonthlyCouponError
-from coupon_client import CouponClient, CouponError, _cbc_encrypt
+from workspace.accounts.credentials import CredentialCache, token_expiry
+from workspace.accounts.storage import DatabaseLoginStorage
+from features.checkin.client import CheckinClient, CheckinError
+from features.monthly_coupon.auth import guizhou_session
+from features.monthly_coupon.client import MonthlyCouponClient, MonthlyCouponError
+from features.coupons.client import CouponClient, CouponError, _cbc_encrypt
 from recharge.cmcc import ActivityClient
 from activities.seven_day.client import SevenDayClient, SevenDayError
-from net_age import NetAgeClient
+from features.net_age.service import NetAgeClient
 from tests import test_checkin_client as checkin
 from tests import test_coupon_client as wallet
 from tests import test_monthly_coupon_auth as monthly
@@ -70,6 +70,31 @@ class CredentialCacheTests(unittest.TestCase):
         for path in Path(self.directory.name).glob('accounts.sqlite3*'):
             for secret in (b'opaque-secret-cookie',b'opaque-secret-header',b'private-account-context',SNAPSHOT['phone'].encode()):
                 self.assertNotIn(secret,path.read_bytes())
+
+    def test_verified_install_is_atomic_and_old_rejection_cannot_remove_the_new_identity(self):
+        original=self.connect();before=self.cache.peek('scope-a',SNAPSHOT)
+        candidate=http_client();candidate.cookies.set('sessionToken','verified-new-session',domain='official.test')
+        updated=self.cache.install('scope-a',{**SNAPSHOT,'credential_revision':10},candidate,{'uid':'verified-owner'},
+            expiry_cookies=('sessionToken',),expected_generation=before['generation'])
+        self.assertIsNotNone(updated);self.assertNotEqual(updated['generation'],before['generation'])
+        self.assertIsNone(self.cache.install('scope-a',SNAPSHOT,candidate,{'uid':'stale'},
+            expiry_cookies=('sessionToken',),expected_generation=before['generation']))
+        self.assertFalse(self.cache.discard('scope-a',SNAPSHOT,expected_generation=before['generation']))
+        self.assertTrue(self.cache.recover(original));self.assertEqual(self.logins,1)
+        self.assertEqual(original._credential_data['uid'],'verified-owner')
+
+    def test_expired_record_retains_maintenance_context_without_becoming_valid(self):
+        self.connect(expires=1100);self.clock[0]=1200
+        self.assertIsNone(self.cache.load('scope-a',SNAPSHOT))
+        self.assertIsNotNone(self.cache.peek('scope-a',SNAPSHOT))
+        self.assertIsNone(self.cache.peek('scope-a',{**SNAPSHOT,'phone':'13900000000'}))
+
+    def test_verified_update_cannot_resurrect_a_session_removed_during_validation(self):
+        candidate=self.connect();before=self.cache.peek('scope-a',SNAPSHOT)
+        self.cache.discard('scope-a',SNAPSHOT,expected_generation=before['generation'])
+        self.assertIsNone(self.cache.install('scope-a',SNAPSHOT,candidate,{'uid':'old-owner'},
+            expiry_cookies=('sessionToken',),expected_generation=before['generation']))
+        self.assertIsNone(self.cache.peek('scope-a',SNAPSHOT))
 
     def test_accounts_realms_and_phone_mismatch_never_share_credentials(self):
         self.connect()
@@ -359,7 +384,7 @@ class WalletReuseTests(unittest.TestCase):
             with self.client._session() as (http,_,_):
                 http.post = Mock(return_value=wallet.Response({'retCode':'500002'}))
                 # This is an actual business rejection, not login expiry.
-                from coupon_client import _unpack
+                from features.coupons.client import _unpack
                 _unpack(self.client._json(http.post('https://touch.10086.cn/test',json={})))
         self.client.query()
         self.assertEqual(self.flow.call.call_count,1)
@@ -406,7 +431,7 @@ class WalletReuseTests(unittest.TestCase):
             http.post = post
             return http
         self.client.session_factory = expired_factory
-        with patch('coupon_client._payload',wraps=wallet._payload) as payload:
+        with patch('features.coupons.client._payload',wraps=wallet._payload) as payload:
             result = self.client.query()
         self.assertEqual(len(result['items']),1)
         self.assertEqual([c.args[1] for c in payload.call_args_list],[old_msgid[0],fresh_msgid])
@@ -509,7 +534,7 @@ class MonthlyReuseTests(unittest.TestCase):
             self.sessions.append(session)
             return session
         self.factory = factory
-        self.patch = patch('monthly_coupon_auth.AppLoginSession.from_credentials',return_value=self.flow)
+        self.patch = patch('features.monthly_coupon.auth.AppLoginSession.from_credentials',return_value=self.flow)
         self.patch.start();self.addCleanup(self.patch.stop)
 
     def session(self):

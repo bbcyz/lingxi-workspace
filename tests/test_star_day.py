@@ -10,11 +10,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from http_transport import requests
-from login_storage import DatabaseLoginStorage
+from workspace.http_transport import requests
+from workspace.accounts.storage import DatabaseLoginStorage
 from recharge.cmcc import SHANGHAI
-from star_day_client import StarDayClient, StarDayError
-from star_day_scheduler import StarDayScheduler
+from features.star_day.client import StarDayClient, StarDayError
+from features.star_day.scheduler import StarDayScheduler
 
 
 class Response:
@@ -59,7 +59,7 @@ class ClientTests(unittest.TestCase):
             client = self.session()
             try: yield client, deepcopy(self.snapshot)
             finally: client.close()
-        self.auth = patch('star_day_client.star_day_session', auth)
+        self.auth = patch('features.star_day.client.star_day_session', auth)
         self.auth.start();self.addCleanup(self.auth.stop)
     def session(self):
         s = Session(self.handle);self.sessions.append(s);return s

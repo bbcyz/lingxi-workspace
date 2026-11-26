@@ -9,10 +9,18 @@ import android.webkit.*;
 import android.widget.*;
 import android.view.*;
 import android.Manifest;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 public final class MainActivity extends Activity {
+    private static final int OPEN_ACTIVITY_ZIP = 2, SAVE_ACTIVITY_ZIP = 3;
     private WebView web;
     private TextView status;
+    private ValueCallback<Uri[]> packageFile;
+    private String packageExport;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable awaitReady = new Runnable() {
         public void run() {
@@ -38,6 +46,26 @@ public final class MainActivity extends Activity {
         root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1)); setContentView(root);
         web.getSettings().setJavaScriptEnabled(true); web.getSettings().setDomStorageEnabled(true);
         web.getSettings().setAllowFileAccess(false); web.getSettings().setAllowContentAccess(false);
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                if (packageFile != null) packageFile.onReceiveValue(null);
+                packageFile = callback;
+                Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip");
+                startActivityForResult(pick, OPEN_ACTIVITY_ZIP);
+                return true;
+            }
+        });
+        web.setDownloadListener((url, agent, disposition, mime, length) -> {
+            Uri source = Uri.parse(url);
+            Uri local = Uri.parse(WorkspaceService.url);
+            if (!"http".equals(source.getScheme()) || !"127.0.0.1".equals(source.getHost())
+                    || source.getPort() != local.getPort() || !"application/zip".equals(mime)
+                    || !source.getPath().matches("/api/platforms/[a-z][a-z0-9-]{0,63}/package")) return;
+            packageExport = url;
+            Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("application/zip").putExtra(Intent.EXTRA_TITLE, URLUtil.guessFileName(url, disposition, mime));
+            startActivityForResult(save, SAVE_ACTIVITY_ZIP);
+        });
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) { status.setVisibility(View.GONE); }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
@@ -57,6 +85,49 @@ public final class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(service); else startService(service);
         handler.post(awaitReady);
     }
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        Uri file = result == RESULT_OK && data != null ? data.getData() : null;
+        if (request == OPEN_ACTIVITY_ZIP && packageFile != null) {
+            packageFile.onReceiveValue(file != null && "content".equals(file.getScheme()) ? new Uri[]{file} : null);
+            packageFile = null;
+        } else if (request == SAVE_ACTIVITY_ZIP) {
+            String source = packageExport;
+            packageExport = null;
+            if (file != null && source != null) savePackage(source, file, WorkspaceService.token);
+        }
+    }
+
+    private void savePackage(String source, Uri destination, String token) {
+        new Thread(() -> {
+            String message = "活动包已导出";
+            try {
+                HttpURLConnection connection = (HttpURLConnection) new URL(source).openConnection();
+                connection.setInstanceFollowRedirects(false);
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(20000);
+                connection.setRequestProperty("Cookie", "lingxi_mobile=" + token);
+                try {
+                    if (connection.getResponseCode() != 200 || !"application/zip".equals(connection.getContentType())) {
+                        throw new IOException("Invalid activity package response");
+                    }
+                    try (InputStream input = connection.getInputStream();
+                         OutputStream output = getContentResolver().openOutputStream(destination, "wt")) {
+                        if (output == null) throw new IOException("Package destination is unavailable");
+                        byte[] buffer = new byte[8192];
+                        int size;
+                        while ((size = input.read(buffer)) != -1) output.write(buffer, 0, size);
+                    }
+                } finally {
+                    connection.disconnect();
+                }
+            } catch (IOException error) {
+                message = "活动包导出失败，请重试";
+            }
+            String result = message;
+            runOnUiThread(() -> Toast.makeText(this, result, Toast.LENGTH_SHORT).show());
+        }, "activity-package-export").start();
+    }
     @Override public boolean onCreateOptionsMenu(Menu menu) {
         menu.add(0, 1, 0, "重新加载"); menu.add(0, 2, 1, "后台运行说明"); menu.add(0, 3, 2, "停止并退出"); return true;
     }
@@ -69,5 +140,10 @@ public final class MainActivity extends Activity {
         return true;
     }
     @Override public void onBackPressed() { if (web.canGoBack()) web.goBack(); else moveTaskToBack(true); }
-    @Override protected void onDestroy() { handler.removeCallbacks(awaitReady); web.destroy(); super.onDestroy(); }
+    @Override protected void onDestroy() {
+        handler.removeCallbacks(awaitReady);
+        if (packageFile != null) packageFile.onReceiveValue(null);
+        web.destroy();
+        super.onDestroy();
+    }
 }

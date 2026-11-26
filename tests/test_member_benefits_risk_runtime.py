@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from member_benefits_risk_runtime import (
+from features.member_benefits.risk_runtime import (
     DFP_SDK_SHA256,
     WHEEL_GLUE_SHA256,
     WHEEL_WASM_SHA256,
@@ -16,8 +16,30 @@ from member_benefits_risk_runtime import (
 
 
 class RiskRuntimeTests(unittest.TestCase):
+    def test_cold_process_can_run_both_runtime_types_concurrently(self):
+        code = '''
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from features.member_benefits.risk_runtime import run_dfp, run_wheel
+with TemporaryDirectory() as directory:
+    def run(index):
+        if index % 2:
+            result = run_wheel('t' * 36, mock_gettoken=True, wheel_min_lifetime_ms=0)
+            return bool(result['roto_simple']['value'])
+        return run_dfp(mock_server=True, state_path=Path(directory) / (str(index) + '.json'))['ok']
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        assert all(executor.map(run, range(8)))
+print('concurrent-runtime-ok')
+'''
+        result = subprocess.run([sys.executable, '-B', '-X', 'utf8', '-c', code],
+            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
+            encoding='utf8', timeout=40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('concurrent-runtime-ok', result.stdout)
+
     def test_android_import_does_not_load_the_desktop_v8_package(self):
-        code = ('import sys; import member_benefits_risk_runtime as runtime; '
+        code = ('import sys; import features.member_benefits.risk_runtime as runtime; '
                 'assert runtime.ANDROID; assert "py_mini_racer" not in sys.modules')
         subprocess.run([sys.executable, '-c', code], cwd=Path(__file__).resolve().parents[1],
                        env={**os.environ, 'LINGXI_ANDROID': '1'}, check=True)

@@ -11,9 +11,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit, urlunsplit, urljoin
 
-from http_transport import requests
-from app_login import AppLoginSession, AppLoginError
-from member_benefits_risk_runtime import run_dfp
+from workspace.http_transport import requests
+from workspace.accounts.login import AppLoginSession, AppLoginError
+from features.member_benefits.risk_runtime import run_dfp
 from runtime_paths import RECHARGE_DATA_DIR
 from .device import APP_ID as DEVICE_APP_ID, SERVER as DEVICE_SERVER
 

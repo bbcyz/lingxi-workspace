@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock
 
 from app import create_app
-from network_access import classify_access_host
+from workspace.network_access import classify_access_host
 from recharge.cmcc import ActivityClient
 
 
@@ -61,7 +61,7 @@ class NetworkAccessTests(unittest.TestCase):
         import threading
         from urllib.request import ProxyHandler, build_opener
         from unittest.mock import patch
-        from network_access import create_http_server
+        from workspace.network_access import create_http_server
         with patch.dict(os.environ):
             os.environ.pop('LINGXI_HOST', None)
             server = create_http_server(self.app, 0)

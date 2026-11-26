@@ -8,9 +8,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from http_transport import requests
+from workspace.http_transport import requests
 
-from coupon_cashier_h5 import (AUTH_PATH, ORDER_BASE, CouponCashierError, CouponCashierH5,
+from features.coupons.cashier_h5 import (AUTH_PATH, ORDER_BASE, CouponCashierError, CouponCashierH5,
                                _decrypt, _encrypt)
 
 PHONE = '13800000000'
@@ -87,7 +87,7 @@ class CashierH5Tests(unittest.TestCase):
         self.assertEqual(failed.exception.code,'CASHIER_FORMAT')
 
     def test_inspect_only_authenticates_and_reads_the_existing_order(self):
-        with patch('coupon_cashier_h5.datetime') as now:
+        with patch('features.coupons.cashier_h5.datetime') as now:
             now.now.return_value = datetime(2026, 10, 30)
             result = self.client.inspect_order(ORDER, '30')
         self.assertEqual(result, {'order_id': ORDER, 'amount': '30.00', 'account_masked': '138****0000',
@@ -147,7 +147,7 @@ class CashierH5Tests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1]/'analysis'/'coupons-cache'/'order-orderList.js'
         if not shutil.which('node') or not source.is_file():
             self.skipTest('Retained official order page and Node are required')
-        with patch('coupon_cashier_h5.datetime') as now:
+        with patch('features.coupons.cashier_h5.datetime') as now:
             now.now.return_value = datetime(2026, 10, 30)
             self.client.inspect_order(ORDER, '30')
         script = r"""
@@ -258,8 +258,8 @@ process.stdout.write(JSON.stringify({startTime:state.startTime,endTime:state.end
             self.skipTest('Retained official source and Node are required')
         flow = SimpleNamespace(client=self.session, current=lambda: None, snapshot=SNAPSHOT,
                                xk='11111111-2222-3333-4444-555555555555', bearer='')
-        with patch('coupon_cashier_h5.time.time', return_value=1700000000), patch(
-                'coupon_cashier_h5.secrets.choice', side_effect=lambda alphabet: '1' if len(alphabet) == 10 else '6'):
+        with patch('features.coupons.cashier_h5.time.time', return_value=1700000000), patch(
+                'features.coupons.cashier_h5.secrets.choice', side_effect=lambda alphabet: '1' if len(alphabet) == 10 else '6'):
             self.client._request(flow, AUTH_PATH, {}, auth=True)
         script = r"""
 const vm = require('node:vm');

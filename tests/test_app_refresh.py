@@ -2,12 +2,11 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from app_login import (AppLoginSession, AppLoginError, AppCredentialError,
+from workspace.accounts.login import (AppLoginSession, AppLoginError, AppCredentialError,
                        REFRESH_PATH, AUTH_REFRESH_PATH, INIT_PATH, merge_app_cookie)
 from app import create_app
-from unified_logins import UnifiedLogins
-from session_maintenance import SessionMaintenance
-from lingxi_client import LingxiError
+from workspace.accounts.pool import SessionMaintenance, UnifiedLogins
+from features.lingxi.client import LingxiError
 from recharge.accounts import AccountManager
 from recharge.cmcc import ActivityClient, ActivityError
 from recharge.scheduler import ClaimScheduler

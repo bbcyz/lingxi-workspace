@@ -10,44 +10,42 @@ from threading import Lock, RLock
 from urllib.parse import urlsplit
 
 from flask import Flask, Response, jsonify, render_template, request, session, stream_with_context, send_from_directory
-from http_transport import RequestException
+from workspace.http_transport import RequestException
 
-from lingxi_client import Account, LingxiError, chat, exchange_cookie, verify_token
-from app_login import (AppLoginError, AppLoginSession, AppCredentialError, SMS_VALID_SECONDS,
+from features.lingxi.client import Account, LingxiError, chat, exchange_cookie, verify_token
+from workspace.accounts.login import (AppLoginError, AppLoginSession, AppCredentialError, SMS_VALID_SECONDS,
                        SLIDER_REQUIRED_CODE, LOGIN_SLIDER_APP_ID, LOGIN_SLIDER_DEVICE_PATH)
-from unified_logins import UnifiedLogins
-from login_storage import DatabaseLoginStorage, LoginStorageError
-from bill_query import register_bills
-from usage_query import register_usage
-from services_query import register_services
-from mobile_rights import register_mobile_rights
-from member_benefits import register_member_benefits
-from net_age import register_net_age
-from session_maintenance import SessionMaintenance
+from workspace.accounts.pool import SessionMaintenance, UnifiedLogins
+from workspace.accounts.storage import DatabaseLoginStorage, LoginStorageError
+from features.information import register_information
+from features.mobile_rights import register_mobile_rights
+from features.member_benefits.service import register_member_benefits
+from features.net_age.service import register_net_age
 from recharge.cmcc import ActivityError
-from lingxi_scheduler import LingxiScheduler, TaskError
-from checkin_client import CheckinError, CheckinClient
-from checkin_scheduler import CheckinScheduler, CheckinTaskError
-from monthly_coupon_auth import MonthlyCouponAuthError
-from monthly_coupon_client import MonthlyCouponClient
-from monthly_coupon_scheduler import MonthlyCouponScheduler, MonthlyTaskError
-from star_day_client import StarDayError
-from star_day_auth import StarDayAuthError
-from star_day_scheduler import StarDayScheduler
-from credential_cache import CredentialCache
-from platform_manager import PlatformManager
-from feature_control import FeatureControl
+from features.lingxi.scheduler import LingxiScheduler, TaskError
+from features.checkin.beans import CheckinBeans
+from features.checkin.client import CheckinError, CheckinClient
+from features.checkin.scheduler import CheckinScheduler, CheckinTaskError
+from features.monthly_coupon.auth import MonthlyCouponAuthError
+from features.monthly_coupon.client import MonthlyCouponClient
+from features.monthly_coupon.scheduler import MonthlyCouponScheduler, MonthlyTaskError
+from features.star_day.client import StarDayError
+from features.star_day.auth import StarDayAuthError
+from features.star_day.scheduler import StarDayScheduler
+from workspace.accounts.credentials import CredentialCache
+from workspace.platform_manager import PACKAGE_UPLOAD_PATH, PlatformManager
+from workspace.feature_control import FeatureControl
 import activities
-from coupon_client import CouponError, SORTS as COUPON_SORTS
-from coupon_use import CouponUseManager
-from coupon_native_device import NativeRechargeDevices
-from coupon_native_captcha import RechargeCaptcha
-from coupon_notices import CouponNotices
-from coupon_captcha import register_coupon_captcha
-from runtime_paths import DATA_DIR,RECHARGE_DATA_DIR
-from access_security import AccessGate, register_access
-from update_checker import register_updates
-from network_access import register_network
+from features.coupons.client import CouponError, SORTS as COUPON_SORTS
+from features.coupons.use import CouponUseManager
+from features.coupons.native_device import NativeRechargeDevices
+from features.coupons.native_captcha import RechargeCaptcha
+from features.coupons.notices import CouponNotices
+from features.coupons.captcha import register_coupon_captcha
+from runtime_paths import DATA_DIR,RECHARGE_DATA_DIR,prepare_runtime_data
+from workspace.access_security import AccessGate, register_access
+from workspace.update_checker import register_updates
+from workspace.network_access import register_network
 
 
 def create_app(*, enable_recharge=False, recharge_manager=None, recharge_scheduler=None, database_path=None, recharge_data_dir=None):
@@ -245,6 +243,10 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
             origin = request.headers.get("Origin")
             if origin and urlsplit(origin).netloc != request.host:
                 return jsonify(error="请求来源不正确。"), 403
+            if request.path == PACKAGE_UPLOAD_PATH:
+                if origin and origin != request.host_url.rstrip('/'):
+                    return jsonify(error="请求来源不正确。"), 403
+                return None  # The local package endpoint accepts a bounded ZIP body.
             if request.path.startswith('/coupon-verification/'):
                 return None  # The fixed verification gateway validates its SDK form bodies.
             if not request.is_json:
@@ -466,11 +468,45 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
 
     @app.get('/api/checkin/status')
     def checkin_status():
+        if login_id := request.args.get('login_id'):
+            checkin_scheduler.refresh_account(login_id)
         return jsonify(**checkin_scheduler.status(), team_awards=checkin_teams.award_status())
+
+    @app.route('/api/checkin/beans', methods=['GET', 'POST'])
+    def checkin_bean_rewards():
+        if request.method == 'GET':
+            login_id, kind, item_id, cost = request.args.get('login_id'), None, None, None
+        else:
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                return jsonify(error='请提供要操作的任务或奖品。'), 400
+            login_id, kind = payload.get('login_id'), payload.get('kind')
+            item_id, cost = payload.get('item_id'), payload.get('cost')
+            if (kind not in ('claim', 'redeem') or not isinstance(item_id, str) or not item_id
+                    or kind == 'redeem' and not isinstance(cost, str)):
+                return jsonify(error='请选择并确认要操作的任务或奖品。'), 400
+        if not isinstance(login_id, str) or not login_id:
+            return jsonify(error='请选择共享账号。'), 400
+        try:
+            return jsonify(checkin_beans.run(login_id, kind=kind, item_id=item_id, cost=cost))
+        except CheckinError as error:
+            return jsonify(error=str(error), code=error.code, uncertain=error.uncertain), error.status
 
     @app.post('/api/checkin/teams/awards')
     def checkin_team_awards():
         return jsonify(queued=checkin_teams.queue_awards(immediate=True))
+
+    @app.route('/api/checkin/beans/tasks', methods=['GET', 'POST'])
+    def checkin_bean_tasks():
+        if request.method == 'POST':
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                return jsonify(error='请提供有效的任务执行参数。'), 400
+            login_id = payload.get('login_id')
+            if login_id is not None and (not isinstance(login_id, str) or unified.get_id(login_id) is None):
+                return jsonify(error='请选择有效共享账号。'), 400
+            return jsonify(queued=checkin_beans.queue(login_id))
+        return jsonify(checkin_beans.task_status())
 
     @app.post('/api/checkin/teams/preview')
     def preview_checkin_teams():
@@ -771,7 +807,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                               else flow.login(phone, code))
                     token = ''
                     if features.enabled('lingxi'):
-                        from feature_runtime import FeatureLease, feature_scope
+                        from workspace.feature_runtime import FeatureLease, feature_scope
                         with feature_scope(FeatureLease(features, 'lingxi')):
                             token = exchange_cookie(cookie)
                             verify_token(token)
@@ -780,9 +816,9 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                     saved = unified.remember(phone, cookie, profile, token, name.strip(),
                                              app_context=context if isinstance(context,dict) else None)
                     app.extensions['session_maintenance'].due.pop(saved.id, None)
-                    for hook in ('seven_day_login_restored', 'daily_gold_login_restored','net_age_surprise_login_restored'):
-                        if restored := app.extensions.get(hook):
-                            restored(saved.id)
+                    platforms.login_restored(saved.id)
+                    if restored := app.extensions.get('net_age_surprise_login_restored'):
+                        restored(saved.id)
                     if not manage:
                         current = apply_login(current, saved)
             with accounts_lock:
@@ -1025,12 +1061,13 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                 saved = unified.get(logged.app_phone)
             return current_app_login(saved.id) if saved else None
 
-        if recharge_manager is None and (database is not None or recharge_data_dir is not None):
-            activity_data=Path(recharge_data_dir) if recharge_data_dir is not None else RECHARGE_ROOT/'.local'
-            recharge_manager = AccountManager(storage=activity_data/'accounts.json', database=database)
-        if recharge_scheduler is None and recharge_data_dir is not None:
-            from recharge.scheduler import ClaimScheduler
-            recharge_scheduler=ClaimScheduler(recharge_manager,storage=Path(recharge_data_dir)/'schedules.json')
+        if database is not None or recharge_data_dir is not None:
+            activity_data=Path(recharge_data_dir) if recharge_data_dir is not None else Path(database_path).resolve().parent/'recharge'
+            if recharge_manager is None:
+                recharge_manager = AccountManager(storage=activity_data/'accounts.json', database=database)
+            if recharge_scheduler is None:
+                from recharge.scheduler import ClaimScheduler
+                recharge_scheduler=ClaimScheduler(recharge_manager,storage=activity_data/'schedules.json')
         def prepare_recharge_account(account):
             saved = unified.get_id(account.pool_login_id)
             if saved is None or saved.status != 'active':
@@ -1202,14 +1239,63 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
     def checkin_credentials(login_id):
         with unified.lock:
             saved = unified.get_id(login_id)
-            if saved is None or saved.status == 'login_required':
+            if saved is None:
                 raise CheckinError('共享账号需要重新登录，请在账号管理填写验证码。', 'APP_LOGIN_REQUIRED', 401)
-            return {**unified.credentials(login_id),'id':login_id}
+            snapshot = {**unified.credentials(login_id), 'id': login_id, 'primary_status': saved.status}
+            if saved.status == 'login_required' and credential_cache.load('qwhdmark:1021122301', snapshot) is None:
+                raise CheckinError('APP 及签到活动均需要恢复登录，请在账号管理验证。', 'APP_LOGIN_REQUIRED', 401)
+            return snapshot
 
-    checkin_scheduler = CheckinScheduler(checkin_credentials, unified.public, storage=database,
+    def checkin_accounts():
+        result = unified.public()
+        for item in result:
+            if item['status'] == 'login_required':
+                snapshot = unified.credentials(item['id'])
+                if snapshot is not None and credential_cache.load('qwhdmark:1021122301', {**snapshot, 'id': item['id']}) is not None:
+                    item.update(status='active', activity_session_valid=True, app_login_required=True)
+        return result
+
+    checkin_scheduler = CheckinScheduler(checkin_credentials, checkin_accounts, storage=database,
         client_factory=lambda provider:CheckinClient(provider,credential_cache=credential_cache))
     app.extensions['checkin_scheduler'] = checkin_scheduler
-    from checkin_teams import CheckinTeams
+    def bean_query(login_id, kind):
+        from features.information.bills import BillError
+        from features.information.usage import UsageError
+        from features.information.services import ServicesError
+        try:
+            if kind == 'usage':
+                return app.extensions['usage_queries'].query(login_id)
+            if kind == 'overview':
+                app.extensions['usage_queries'].query(login_id)
+                app.extensions['services_queries'].query(login_id)
+            queries = app.extensions['bill_queries']
+            result = queries.query(login_id, queries.months()[0])
+            if kind == 'balance' and result['balance'] is None:
+                raise CheckinError('未查到真实余额，未提交任务完成记录。', 'BALANCE_QUERY_FAILED')
+            return result
+        except (BillError, UsageError, ServicesError) as error:
+            raise CheckinError(str(error), error.code, error.status) from error
+
+    from features.checkin.video import CheckinVideo
+    from features.checkin.cloud import CheckinCloud
+    from features.checkin.migu import CheckinMigu
+    from features.checkin.baidu_map import CheckinBaiduMap
+    from features.checkin.taobao import CheckinTaobao
+    from features.checkin.cainiao import CheckinCainiao
+    checkin_beans = CheckinBeans(checkin_scheduler, database, query=bean_query,
+        video_factory=lambda login_id: CheckinVideo(lambda:checkin_credentials(login_id), credential_cache,
+            recover=lambda snapshot:app.extensions['app_identity_recover'](snapshot)),
+        cloud_factory=lambda login_id: CheckinCloud(lambda:checkin_credentials(login_id), credential_cache,
+            recover=lambda snapshot:app.extensions['app_identity_recover'](snapshot)),
+        migu_factory=lambda login_id: CheckinMigu(lambda:checkin_credentials(login_id), credential_cache),
+        baidu_map_factory=lambda login_id: CheckinBaiduMap(lambda:checkin_credentials(login_id), credential_cache),
+        taobao_factory=lambda login_id: CheckinTaobao(lambda:checkin_credentials(login_id), credential_cache),
+        cainiao_factory=lambda login_id: CheckinCainiao(lambda:checkin_credentials(login_id), credential_cache))
+    checkin_scheduler.beans = checkin_beans
+    app.extensions['checkin_beans'] = checkin_beans
+    from features.checkin.partner_logins import register_partner_logins
+    register_partner_logins(app,unified.public,unified.credentials,credential_cache,checkin_beans)
+    from features.checkin.teams import CheckinTeams
     checkin_teams = CheckinTeams(checkin_scheduler)
     checkin_scheduler.team_awards = checkin_teams
     app.extensions['checkin_teams'] = checkin_teams
@@ -1255,12 +1341,8 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
         if updated is not None:
             sync_chat_credentials(updated)
 
-    register_bills(app, unified.public, unified.credentials, recover=recover_activity_identity,
-                   accept_credentials=accept_bill_credentials)
-    register_usage(app, unified.public, unified.credentials, recover=recover_activity_identity,
-                   accept_credentials=accept_bill_credentials)
-    register_services(app, unified.public, unified.credentials, recover=recover_activity_identity,
-                      accept_credentials=accept_bill_credentials)
+    register_information(app, unified.public, unified.credentials, recover=recover_activity_identity,
+                         accept_credentials=accept_bill_credentials)
     register_member_benefits(app, unified.credentials, credential_cache, recover=recover_activity_identity)
     register_net_age(app, lambda login_id:activity_credentials(login_id, allow_cached=True),
                      unified.public, credential_cache, database, recover_activity_identity)
@@ -1268,10 +1350,12 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
                            recover=recover_activity_identity, accept_credentials=accept_bill_credentials)
 
     platforms = PlatformManager(app, root_dir=Path(activities.__file__).resolve().parent,
+                                package_dir=Path(database_path).resolve().parent/'activity-plugins' if database_path is not None else None,
                                 storage=database, credentials=activity_credentials, accounts=unified.public, features=features)
     app.extensions['platform_manager'] = platforms
     features.bind_scheduler('lingxi', lingxi_scheduler, background=('tick',), workers=('_worker','_send_one'))
     features.bind_scheduler('checkin', checkin_scheduler, background=('tick','check_startup','_enqueue'), workers=('_perform','_refresh'))
+    features.bind_scheduler('checkin', checkin_beans, background=('tick','queue'), workers=('_perform_tasks',))
     features.bind_scheduler('monthly-coupon', monthly_scheduler, background=('tick','check_startup','_queue'), workers=('_perform',))
     features.bind_scheduler('star-day', star_scheduler, background=('tick','_queue'), workers=('_perform','calibrate'))
     features.bind_scheduler('net-age', app.extensions['net_age_surprise_scheduler'],
@@ -1279,7 +1363,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
     if enable_recharge:
         features.bind_scheduler('recharge', recharge.extensions['scheduler'],
             background=('tick','_sync_automatic'), workers=('_worker','_run_attempts'))
-    from navigation_status import register_navigation_status
+    from workspace.navigation_status import register_navigation_status
     issue_sources = {'lingxi': (lingxi_scheduler,'jobs'), 'checkin': (checkin_scheduler,'data'),
         'monthly': (monthly_scheduler,'data'), 'star': (star_scheduler,'data'), 'coupons': (coupon_uses,'data'),
         'coupon_reminders': (coupon_uses.reminders,'data')}
@@ -1292,6 +1376,7 @@ def create_app(*, enable_recharge=False, recharge_manager=None, recharge_schedul
     return app
 
 
+prepare_runtime_data()
 app = create_app(enable_recharge=True, database_path=DATA_DIR/'accounts.sqlite3',recharge_data_dir=RECHARGE_DATA_DIR)
 
 if __name__ == "__main__":
@@ -1304,7 +1389,7 @@ if __name__ == "__main__":
     app.extensions['net_age_surprise_scheduler'].start()
     app.extensions['platform_manager'].start()
     app.extensions['recharge_app'].extensions['scheduler'].start()
-    from network_access import create_http_server
+    from workspace.network_access import create_http_server
     server = create_http_server(app)
     print(f'本地工具台已启动：IPv4 http://127.0.0.1:{server.effective_port}/ · IPv6 http://[::1]:{server.effective_port}/', flush=True)
     server.run()

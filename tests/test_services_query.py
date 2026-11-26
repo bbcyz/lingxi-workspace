@@ -9,9 +9,9 @@ from unittest.mock import Mock, patch
 
 from flask import Flask
 
-from app_login import AppLoginError
+from workspace.accounts.login import AppLoginError
 from recharge.cmcc import SHANGHAI
-from services_query import (SERVICES_PATH, BINDINGS_PATH, CANCEL_GATEWAY_HOST, CANCEL_SMS_PATH, CANCEL_PATH, ServicesError,
+from features.information.services import (SERVICES_PATH, BINDINGS_PATH, CANCEL_GATEWAY_HOST, CANCEL_SMS_PATH, CANCEL_PATH, ServicesError,
                             ServicesQueries, normalize_services, register_services)
 
 NOW = datetime(2026, 11, 6, 15, 30, tzinfo=SHANGHAI)
@@ -56,7 +56,7 @@ class ServicesQueryTests(unittest.TestCase):
             transports.append(flow.transport)
             return original(path, payload)
         flow.call.side_effect = call
-        with patch('services_query.requests.Session') as create:
+        with patch('features.information.services.requests.Session') as create:
             first, second = Mock(), Mock()
             create.return_value.__enter__.side_effect = [first, second]
             service.query('a'); service.query('a')
@@ -513,7 +513,7 @@ class ServiceCancellationTests(unittest.TestCase):
     def test_json_post_routes_require_owned_account_and_ignore_injected_product_parameters(self):
         app = Flask('cancel-routes')
         accounts = lambda: [{'id': 'a', 'status': 'active', 'phone_masked': '138****0000'}]
-        with patch('services_query.AppLoginSession.from_credentials', self.factory):
+        with patch('features.information.services.AppLoginSession.from_credentials', self.factory):
             register_services(app, accounts, lambda key: deepcopy(self.snapshots.get(key)))
         client = app.test_client()
         self.assertEqual(client.get('/api/services/cancel/prepare').status_code, 405)

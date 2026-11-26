@@ -1,5 +1,5 @@
 import unittest
-from coupon_use import _choices
+from features.coupons.use import _choices
 
 
 class BestCouponAmountTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class BestCouponAmountTests(unittest.TestCase):
         self.assertEqual((choice['value'], choice['payment']), ('28', '25.00'))
 
     def test_does_not_offer_out_of_range_or_zero_payment(self):
-        from coupon_use import CouponUseError
+        from features.coupons.use import CouponUseError
         for rule, limits in [({'saleType': 10, 'saleCode': '20~30:2'}, {'minAmount': 40, 'maxAmount': 50}),
                              ({'saleType': 10, 'saleCode': '20~20:20'}, {})]:
             with self.subTest(rule=rule), self.assertRaises(CouponUseError):

@@ -5,8 +5,8 @@ import json
 from types import SimpleNamespace
 import unittest
 
-from http_transport import requests
-from credential_cache import CredentialCache
+from workspace.http_transport import requests
+from workspace.accounts.credentials import CredentialCache
 from activities.checkin_common.client import (
     WebCheckinClient, WebCheckinError, WebLoginManager, SCOPE, ENTRY, BASE,
     _encrypt, _decrypt, _json,
@@ -116,7 +116,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(_json(response),{'status':0})
 
     def test_wechat_sms_restores_channel_user_agent_before_sso_callback(self):
-        from activities.wechat_checkin.auth import WechatLoginManager, WECHAT_UA, SCOPE as WECHAT_SCOPE
+        from activities.wechat_checkin.plugin import WechatLoginManager, WECHAT_UA, SCOPE as WECHAT_SCOPE
         self.channel = 'wechat'
         manager = WechatLoginManager(lambda _id:self.snapshot,self.cache,session_factory=self.session,now=lambda:self.clock)
         self.addCleanup(manager.close)

@@ -5,12 +5,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from http_transport import requests
+from workspace.http_transport import requests
 from recharge.cmcc import SHANGHAI
 from activities.daily_gold.client import (DailyGoldClient, DailyGoldError,
     ACT_ID, ENTRY, PLATFORM, campaign_config)
-from credential_cache import CredentialCache
-from monthly_coupon_auth import DEFAULT_ENTRY_URL, guizhou_session
+from workspace.accounts.credentials import CredentialCache
+from features.monthly_coupon.auth import DEFAULT_ENTRY_URL, guizhou_session
 
 
 class Session:
@@ -127,7 +127,7 @@ class DailyGoldProtocolTests(unittest.TestCase):
         cache.connect(PLATFORM+'|'+DEFAULT_ENTRY_URL, snapshot, previous, lambda: {'serviceNum': snapshot['phone']},
                       headers=('AuthorizationAweb',))
         session = Session([])
-        with patch('monthly_coupon_auth._guizhou_login') as login:
+        with patch('features.monthly_coupon.auth._guizhou_login') as login:
             with guizhou_session(lambda: {**snapshot, 'cookie': 'JSESSIONID=rotated'}, ENTRY,
                                  session_factory=lambda: session, credential_cache=cache):
                 self.assertEqual(session.headers['AuthorizationAweb'], 'Bearer valid-provincial-bearer')

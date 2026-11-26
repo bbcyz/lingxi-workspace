@@ -9,6 +9,7 @@ class Element {
   setAttribute(name,value){this.attributes[name]=value;}
   append(...nodes){this.children.push(...nodes);}
   replaceChildren(...nodes){this.children=nodes;}
+  contains(node){return this===node||this.children.some(child=>child.contains(node));}
   click(){if(!this.disabled)return this.handlers.click?.();}
   focus(){this.focused=true;}
   showModal(){this.open=true;}
@@ -34,6 +35,8 @@ const services=(extra={})=>({groups:[{name:'手机 · 我的套餐',items:[{name
 
 async function fixture(options={}){
   const elements=new Map(),calls=[],posts=[],timers=new Map(),timeouts=new Map(),events={},dispatched=[],get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
+  const document={getElementById:get,createElement:tag=>new Element(tag),activeElement:null};
+  get('usage-plan-control').append(get('usage-plan'),get('usage-plan-popover'));
   const control={accounts:options.accounts||[account('first'),account('second')],months:options.months||['202611','202609','202610'],default_month:options.default_month||'202611',query:options.query,usageQuery:options.usageQuery,servicesQuery:options.servicesQuery,accountError:null};
   const fetch=async (url,init)=>{
     calls.push(url);
@@ -56,13 +59,13 @@ async function fixture(options={}){
     return {ok:(response.status||200)===200,status:response.status||200,headers:{get:()=>response.contentType||'application/json'},json:async()=>structuredClone(response.data)};
   };
   vm.runInNewContext(fs.readFileSync(new URL('../static/bills.js',import.meta.url),'utf8'),{
-    document:{getElementById:get,createElement:tag=>new Element(tag)},
+    document,
     window:{addEventListener:(name,handler)=>{events[name]=handler;},dispatchEvent:event=>{dispatched.push(event);}},
     CustomEvent:class{constructor(type,options={}){this.type=type;this.detail=options.detail;}},fetch,Intl,Date,URLSearchParams,
     setInterval(callback){if(!options.cancel)throw new Error('账单页面不得启动自动官方查询');timers.set(1,callback);return 1;},clearInterval(id){timers.delete(id);},
     setTimeout(callback,delay){if(!options.cancel)throw new Error('账单页面不得排程自动重试');timeouts.set(1,{callback,delay});return 1;},clearTimeout(id){timeouts.delete(id);},
   });
-  await flush();return {get,calls,posts,timers,timeouts,events,dispatched,control};
+  await flush();return {get,calls,posts,timers,timeouts,events,dispatched,control,document};
 }
 const queries=env=>env.calls.filter(url=>url.startsWith('/api/bills/query?')).map(url=>Object.fromEntries(new URLSearchParams(url.split('?')[1])));
 const usageQueries=env=>env.calls.filter(url=>url.startsWith('/api/usage/query?')).map(url=>Object.fromEntries(new URLSearchParams(url.split('?')[1])));
@@ -114,24 +117,41 @@ test('missing amounts remain unknown and an official zero remains zero',async()=
   for(const field of ['total','payable','rebate','balance'])assert.equal(env.get('bills-'+field).textContent,'—');
   assert.equal(env.get('bills-original').textContent,'0.00');
   assert.equal(env.get('bills-discount').textContent,'0');
-  assert.match(text(env.get('bills-items')),/未提供金额.*—.*减免 0 元/);
-  assert.doesNotMatch(text(env.get('bills-items')),/优惠前 — 元|减免 — 元/);
-  assert.equal(withClass(env.get('bills-items'),'bills-card-summary').length,1);
-  assert.equal(withClass(env.get('bills-items'),'no-summary').length,1);
-  assert.match(text(withClass(env.get('bills-items'),'no-summary')[0]),/仅提供实付.*10\.00/);
+  assert.equal(env.get('bills-breakdown-payable').textContent,'—');
+  assert.equal(env.get('bills-breakdown').attributes['data-balanced'],'false');
+  const rows=withClass(env.get('bills-items'),'bills-row-total');
+  assert.deepEqual(rows[0].children.slice(1).map(cell=>cell.textContent),['—','0','—']);
+  assert.deepEqual(rows[1].children.slice(1).map(cell=>cell.textContent),['—','—','10.00']);
 });
 
-test('nested details can be collapsed without losing their amounts or querying again',async()=>{
+test('the bill overview shows every official amount and only displays a matching equation',async()=>{
+  const env=await fixture({query:async({month})=>({data:bill({month,
+    payable:month==='202611'?'468.67':'468.68',total:'478.20',original:'1009.80',discount:'531.60',rebate:'9.53',
+    sections:[{name:'代付与返费明细',items:[{name:'活动返费',amount:'-9.53',children:[]}]}],
+    notes:['账单以实际出账为准。'],
+  })})});
+  assert.equal(env.get('bills-breakdown-payable').textContent,'468.67');
+  assert.equal(env.get('bills-breakdown').attributes['data-balanced'],'true');
+  assert.equal(env.get('bills-rebate-label').textContent,'活动返费');
+  assert.equal(env.get('bills-reading-guide').hidden,false);
+  assert.equal(env.get('bills-notes').hidden,false);
+  await env.get('bills-previous').click();
+  assert.equal(env.get('bills-breakdown-payable').textContent,'468.68');
+  assert.equal(env.get('bills-breakdown').attributes['data-balanced'],'false');
+});
+
+test('bill details open by default and can collapse to category totals without querying again',async()=>{
   const env=await fixture();
-  assert.equal(env.get('bills-items').children.length,2);
-  assert.doesNotMatch(text(env.get('bills-items')),/套餐月费/);
-  const toggle=env.get('bills-items').children[0].children[0];
-  assert.equal(toggle.attributes['aria-expanded'],'false');await toggle.click();
-  assert.match(text(env.get('bills-items')),/主套餐/);
-  assert.doesNotMatch(text(env.get('bills-items')),/套餐月费/);
-  assert.equal(env.get('bills-items').children.length,2);
+  assert.equal(withClass(env.get('bills-items'),'bills-row-total').length,2);
+  assert.equal(withClass(env.get('bills-items'),'bills-table').length,1);
+  assert.match(text(env.get('bills-items')),/套餐月费/);
+  const toggle=withClass(env.get('bills-items'),'bills-item-toggle')[0];
+  assert.equal(toggle.attributes['aria-expanded'],'true');await toggle.click();
+  assert.doesNotMatch(text(env.get('bills-items')),/主套餐|套餐月费/);
+  assert.equal(withClass(env.get('bills-items'),'bills-row-detail').length,0);
   await env.get('bills-expand').click();assert.match(text(env.get('bills-items')),/套餐月费/);
   await env.get('bills-collapse').click();assert.doesNotMatch(text(env.get('bills-items')),/主套餐|套餐月费/);
+  assert.equal(withClass(env.get('bills-items'),'bills-row-total').length,2);
   assert.equal(env.get('bills-total').textContent,'555.40');
   assert.equal(queries(env).length,1);
 });
@@ -239,7 +259,33 @@ test('a confirmed duplicate rebate is one signed row even when expanding all bil
   assert.equal(withClass(items,'bills-deduction')[0].textContent,'-20.10');
   assert.equal(env.get('bills-expand').disabled,true);
   await env.get('bills-expand').click();assert.equal(withClass(items,'bills-table').length,0);
+  await withClass(items,'bills-card-heading')[0].click();
+  assert.equal(env.get('bills-rebate-dialog').open,true);
+  assert.equal(env.get('bills-rebate-empty').hidden,false);
   assert.equal(queries(env).length,1);
+});
+
+test('the collapsed bill retains the official totals, dated rebate and savings details',async()=>{
+  const env=await fixture({query:async({month})=>({data:bill({month,summary:[{name:'本月为您节省',amount:'551.70'}],sections:[{name:'代付与返费明细',items:[
+    {name:'活动返费',amount:'-20.10',children:[{name:'返费项目 2',amount:'20.10',children:[
+      {name:'50元话费券',date:'2025-08-08',amount:'19.59'},
+      {name:'40元话费券',date:'2025-08-04',amount:'0.51'},
+    ]}]},
+  ]},{name:'节省明细',items:[{name:'套餐优惠',amount:'551.70',children:[]}]}]})})});
+  const items=env.get('bills-items');
+  await env.get('bills-collapse').click();
+  assert.match(text(items),/合计.*活动返费.*-20\.10.*实际应付.*545\.87.*本月节省.*551\.70/);
+  assert.equal(withClass(items,'bills-savings')[0].open,false);
+  assert.equal(env.get('bills-extra-summary').hidden,true);
+  const trigger=withClass(items,'bills-rebate-trigger')[0];
+  assert.equal(trigger.attributes['aria-haspopup'],'dialog');
+  await trigger.click();
+  assert.equal(env.get('bills-rebate-dialog').open,true);
+  assert.equal(env.get('bills-rebate-detail-total').textContent,'20.10 元');
+  assert.match(text(env.get('bills-rebate-details')),/50元话费券.*2025-08-08.*19\.59.*40元话费券.*0\.51/);
+  assert.equal(queries(env).length,1);
+  await env.get('bills-previous').click();
+  assert.equal(env.get('bills-rebate-dialog').open,false);
 });
 
 test('month cards stay in sync with the selector, including older months, without background requests',async()=>{
@@ -287,6 +333,52 @@ test('bill and usage requests start together and each result renders without wai
   assert.equal(env.get('bills-content').attributes['aria-busy'],'false');
   assert.equal(env.get('usage-content').attributes['aria-busy'],'true');
   slowUsage.resolve({data:usage()});await refresh;
+});
+
+test('refresh keeps all three panels in place until their own current results arrive',async()=>{
+  const env=await fixture();
+  const panels=['bills-items','usage-overview','services-groups'];
+  const previous=panels.map(id=>env.get(id).children[0]);
+  const pendingBill=deferred(),pendingUsage=deferred(),pendingServices=deferred();
+  env.control.query=()=>pendingBill.promise;
+  env.control.usageQuery=()=>pendingUsage.promise;
+  env.control.servicesQuery=()=>pendingServices.promise;
+  const refresh=env.get('bills-refresh').click();await flush();
+  assert.equal(env.get('bills-refresh').attributes['aria-busy'],'true');
+  panels.forEach((id,index)=>assert.equal(env.get(id).children[0],previous[index]));
+  assert.equal(env.get('bills-total').textContent,'555.40');
+  assert.equal(env.get('services-groups').inert,true);
+  pendingUsage.resolve({data:usage({overview:[{key:'flow',name:'新余量',remaining:'18',unit:'GB'}]})});
+  await flush();
+  assert.match(text(env.get('usage-overview')),/新余量.*18/);
+  assert.equal(env.get('bills-items').children[0],previous[0]);
+  assert.equal(env.get('services-groups').children[0],previous[2]);
+  pendingBill.resolve({data:bill({total:'25.00'})});
+  pendingServices.resolve({data:services()});await refresh;
+  assert.equal(env.get('bills-total').textContent,'25.00');
+  assert.equal(env.get('services-groups').inert,false);
+  assert.equal(env.get('bills-refresh').attributes['aria-busy'],'false');
+});
+
+test('switching away from a loaded account shows placeholders without the previous account data',async()=>{
+  const env=await fixture();
+  const pending=deferred();
+  env.control.query=()=>pending.promise;
+  env.control.usageQuery=()=>pending.promise;
+  env.control.servicesQuery=()=>pending.promise;
+  const switching=env.get('bills-accounts').children[1].click();
+  assert.equal(env.get('bills-total').textContent,'—');
+  for(const panel of ['bills-items','services-groups']){
+    assert.equal(withClass(env.get(panel),'information-skeleton').length,3);
+  }
+  const rows=withClass(env.get('usage-overview'),'usage-card-row');
+  assert.deepEqual(rows.map(row=>withClass(row,'usage-card-placeholder').length),[3,2]);
+  assert.ok(rows.every(row=>row.attributes['aria-hidden']==='true'));
+  assert.doesNotMatch(text(env.get('services-groups')),/5G畅享套餐/);
+  pending.resolve({status:429,data:{code:'RATE_LIMITED',error:'查询太频繁'}});
+  await switching;
+  assert.equal(env.get('bills-refresh').attributes['aria-busy'],'false');
+  assert.equal(withClass(env.get('usage-overview'),'usage-card-placeholder').length,0);
 });
 
 test('the usage overview shows all measured resources and their official ratios together',async()=>{
@@ -344,6 +436,24 @@ test('usage values preserve units, zeros, unknowns, unlimited data and separate 
   assert.equal(usageQueries(env).length,1);assert.equal(queries(env).length,1);
 });
 
+test('a speed-limited flow card shows used data without an allowance or gauge',async()=>{
+  const measured={unit:'GB',used:'12',used_only:true};
+  const env=await fixture({usageQuery:async()=>({data:usage({overview:[
+    {key:'flow',name:'国内通用流量',...measured},
+    {key:'flow',name:'定向流量',unit:'GB',total:'10',used:'0',remaining:'10',remaining_percent:'100'},
+  ],groups:[{key:'flow',name:'国内通用流量',items:[{name:'达量降速流量包',...measured}]}]})})});
+  const overview=env.get('usage-overview');
+  let [limited,finite]=withClass(overview,'usage-overview-card');
+  assert.match(text(limited),/已用流量.*12.*GB/);
+  assert.doesNotMatch(text(limited),/可用余量|总量/);
+  assert.equal(withClass(limited,'usage-meter').length,0);
+  assert.match(text(finite),/可用余量.*10.*GB/);
+  await withClass(limited,'usage-group-heading')[0].click();
+  [limited]=withClass(overview,'usage-overview-card');
+  assert.match(text(limited),/达量降速流量包.*已用.*12.*GB/);
+  assert.doesNotMatch(text(limited),/可用余量|总量/);
+});
+
 test('a single measured resource uses one usage card without empty wrapper counters or repeated metadata',async()=>{
   const metadata={scope:'定向流量 / 不可共享',start_at:'2026-11-01 00:00:00',end_at:'2026-12-01 00:00:00',description:'移动云盘定向'};
   const resource={name:'0元和彩云定向流量（包月）',unit:'MB',total:'30720.00',used:'0.00',remaining:'30720.00',remaining_percent:'100.00',...metadata,
@@ -390,16 +500,68 @@ test('other resources are hidden while the current plan and separate usage detai
     {name:'国际及港澳台用量',items:[{name:'境外流量包',unit:'MB',used:'3'}]},
     {key:'voice',name:'套餐外通话',items:[{name:'套餐外主叫',unit:'分钟',used:'2'}]},
   ]})})});
-  const plan=env.get('usage-plan'),groups=env.get('usage-groups');
+  const plan=env.get('usage-plan'),groups=env.get('usage-groups'),popup=env.get('usage-plan-popover');
   assert.equal(plan.textContent,'黔心选套餐');
   assert.equal(groups.hidden,false);
-  assert.match(text(groups),/套餐信息.*国际及港澳台用量.*套餐外通话/);
-  assert.doesNotMatch(text(groups),/其他资源|黔心选套餐/);
-  plan.onclick();
-  assert.match(text(groups),/套餐信息.*黔心选套餐.*套餐通话.*国际及港澳台用量.*套餐外通话/);
-  assert.equal(env.get('usage-detail-0').focused,true);
+  assert.match(text(groups),/国际及港澳台用量.*套餐外通话/);
+  assert.doesNotMatch(text(groups),/其他资源|套餐信息|黔心选套餐/);
+  assert.equal(popup.hidden,true);
+  const trigger=env.get('usage-plan-control');
+  trigger.handlers.pointerenter({pointerType:'mouse'});
+  assert.equal(popup.hidden,false);
+  assert.match(text(popup),/黔心选套餐.*套餐通话.*总量.*100.*分钟/);
+  assert.doesNotMatch(text(popup),/已用|剩余|查看原始用量/);
+  assert.equal(plan.attributes['aria-expanded'],'true');
+  trigger.handlers.pointerleave({pointerType:'mouse'});
+  assert.equal(popup.hidden,true);
   assert.equal(withClass(env.get('usage-overview'),'usage-overview-card').length,3);
   assert.equal(usageQueries(env).length,1);
+});
+
+test('plan details present each allowance in a compact total row and keep plan descriptions',async()=>{
+  const env=await fixture({usageQuery:async()=>({data:usage({groups:[{name:'套餐信息',items:[{
+    name:'家庭套餐',scope:'套餐说明',description:'套餐附带有效说明',children:[
+      {name:'通话',unit:'分钟',total:'100',used:'20',remaining:'80',scope:'套餐包含（非实时余量）'},
+      {name:'流量',unit:'MB',total:'5120',display:{total:{value:'5',unit:'GB'}},scope:'套餐包含（非实时余量）'},
+      {name:'短信',unit:'条',unlimited:true},
+      {name:'下月套餐',scope:'预约套餐',description:'下月生效'},
+    ],
+  }]}]})})});
+  env.get('usage-plan').click();
+  const group=env.get('usage-plan-popover');
+  assert.deepEqual(withClass(group,'usage-plan-total').map(item=>text(item).trim().replace(/\s+/g,' ')),['总量 100 分钟','总量 5 GB','总量 不限量']);
+  assert.match(text(group),/套餐附带有效说明.*下月套餐.*下月生效/);
+  assert.doesNotMatch(text(group),/已用|剩余|查看原始用量|套餐包含/);
+});
+
+test('touch and keyboard can open and dismiss plan details, and switching clears the previous account',async()=>{
+  const pending=deferred();
+  const env=await fixture({usageQuery:({id})=>id==='second'?pending.promise:Promise.resolve({data:usage({groups:[
+    {name:'套餐信息',items:[{name:'主号套餐',description:'主号专用说明'}]},
+  ]})})});
+  const trigger=env.get('usage-plan'),control=env.get('usage-plan-control'),panel=env.get('usage-plan-popover');
+  control.handlers.pointerenter({pointerType:'touch'});
+  assert.equal(panel.hidden,true);
+  trigger.click();
+  env.events.pointerdown({target:panel.children[0]});
+  assert.equal(panel.hidden,false);
+  env.events.pointerdown({target:env.get('usage-overview')});
+  assert.equal(panel.hidden,true);
+  trigger.click();
+  env.document.activeElement=panel.children[0];
+  env.events.keydown({key:'Escape'});
+  assert.equal(panel.hidden,true);
+  assert.equal(trigger.focused,true);
+  trigger.click();
+  const switched=env.get('bills-accounts').children[1].click();
+  assert.equal(panel.hidden,true);
+  assert.equal(control.hidden,true);
+  assert.doesNotMatch(text(panel),/主号套餐/);
+  pending.resolve({data:usage({groups:[{name:'套餐信息',items:[{name:'副号套餐'}]}]})});
+  await switched;
+  assert.equal(trigger.textContent,'副号套餐');
+  assert.equal(panel.hidden,true);
+  assert.equal(usageQueries(env).length,2);
 });
 
 test('package grid lifts identical scope and validity once while preserving per-package descriptions',async()=>{
@@ -503,19 +665,18 @@ test('all three queries start together and subscribed services can finish before
   slowServices.resolve({data:services()});await refresh;
 });
 
-test('subscribed business tables hide fees and status in complete expandable details',async()=>{
+test('subscribed business cards show dates and keep full details expandable',async()=>{
   const env=await fixture({servicesQuery:async()=>({data:services({groups:[{name:'手机 · 我的套餐',items:[{
-    name:'5G畅享套餐',fee:'首月免费，次月128元/月',status:'已生效',fields:[{name:'生效时间',value:'2026-11-01 00:00:00'},{name:'失效时间',value:'2026-11-30 23:59:59'},{name:'业务说明',value:'国内语音与流量\n不含港澳台'},{name:'剩余次数',value:0},{name:'未知字段',value:null}],children:[{name:'来电显示',fee:'免费',status:'使用中',fields:[{name:'业务类型',value:'套餐附属业务'}],children:[{name:'附加说明',fee:null,status:null,fields:[{name:'说明',value:'长期有效'}],children:[]}]}],
+    name:'5G畅享套餐',fee:'首月免费，次月128元/月',status:'已生效',fields:[{name:'订购时间',value:'20261031235955'},{name:'生效时间',value:'2026-11-01 00:00:00'},{name:'失效时间',value:'2026-11-30 23:59:59'},{name:'业务说明',value:'国内语音与流量\n不含港澳台'},{name:'剩余次数',value:0},{name:'未知字段',value:null}],children:[{name:'来电显示',fee:'免费',status:'使用中',fields:[{name:'业务类型',value:'套餐附属业务'}],children:[{name:'附加说明',fee:null,status:null,fields:[{name:'说明',value:'长期有效'}],children:[]}]}],
   }]}]})})});
   assert.equal(env.get('services-tabs').children[0].attributes['aria-selected'],'true');
-  const table=withClass(env.get('services-groups'),'services-table')[0];
-  assert.equal(table.tag,'table');assert.equal(table.attributes['aria-label'],'我的套餐');
-  assert.match(text(table.children[0]),/业务 \/ 有效期.*操作/);assert.doesNotMatch(text(table.children[0]),/资费|状态/);
-  const main=withClass(table,'services-row')[0],detail=withClass(table,'services-detail-row')[0],toggle=withClass(main,'services-name-label')[0];
-  assert.match(text(main),/5G畅享套餐.*生效 2026-11-01 · 失效 2026-11-30/);
+  const list=withClass(env.get('services-groups'),'services-card-list')[0];
+  assert.equal(list.attributes['aria-label'],'我的套餐');
+  const main=withClass(list,'services-row')[0],detail=withClass(list,'services-detail-row')[0],toggle=withClass(main,'services-name-label')[0];
+  assert.match(text(main),/5G畅享套餐.*订购时间.*2026-10-31 23:59.*有效期限.*2026-11-01 00:00 起 至 2026-11-30 23:59/);
   assert.doesNotMatch(text(main),/128元|已生效/);
   assert.equal(detail.hidden,true);assert.equal(toggle.attributes['aria-expanded'],'false');
-  assert.doesNotMatch(text(table),/国内语音|来电显示|附加说明/,'完整详情默认不铺开');
+  assert.doesNotMatch(text(list),/国内语音|来电显示|附加说明/,'完整详情默认不铺开');
   await toggle.click();assert.equal(detail.hidden,false);assert.equal(toggle.attributes['aria-expanded'],'true');
   let content=text(env.get('services-groups'));
   assert.match(content,/资费.*首月免费，次月128元\/月.*状态.*已生效/);
@@ -677,10 +838,10 @@ test('confirmed unsubscribed services come first without mixing details, pending
   ]}]})}),cancel:async({body})=>{assert.equal(body.action_id,'active-member');return {data:cancellationPlan};}});
   const root=env.get('services-groups'),rows=()=>withClass(root,'services-row');
   assert.deepEqual(rows().map(row=>text(withClass(row,'services-name-label')[0]).trim()),[
-    '+ 下月失效会员 已退订','+ 另一已退订会员 已退订','+ 正常会员','+ 已到期会员','+ 受理中会员',
+    '下月失效会员 ? 已退订','另一已退订会员 ? 已退订','正常会员 ?','已到期会员 ?','受理中会员 ?',
   ]);
   assert.equal(rows().filter(row=>row.className.includes('services-cancelled')).length,2);
-  assert.match(text(rows()[0]),/失效 2026-12-01/);
+  assert.match(text(rows()[0]),/失效时间.*2026-12-01 00:00/);
   await withClass(rows()[0],'services-name-label')[0].click();
   assert.match(text(withClass(root,'services-detail-row')[0]),/下月失效说明/);
   env.get('services-search').value='下月';env.get('services-search').handlers.input();
@@ -690,12 +851,34 @@ test('confirmed unsubscribed services come first without mixing details, pending
   assert.equal(env.posts.length,1);assert.equal(servicesQueries(env).length,1);
 });
 
+test('subscription date sorting uses the returned times and retains the correct open card',async()=>{
+  const item=(name,fields)=>({name,fields,children:[]});
+  const env=await fixture({servicesQuery:async()=>({data:services({groups:[{name:'增值业务',items:[
+    item('无订购时间',[]),
+    item('旧订购', [{name:'订购时间',value:'20180513124400'},{name:'业务说明',value:'旧业务说明'}]),
+    item('新订购', [{name:'订购时间',value:'2024-05-24 23:11'},{name:'失效时间',value:'长期有效'}]),
+  ]}]})})});
+  const root=env.get('services-groups'),sort=env.get('services-sort');
+  await withClass(root,'services-name-label')[1].click();
+  sort.value='newest';sort.handlers.change();
+  let cards=withClass(root,'services-card');
+  assert.match(text(cards[0]),/新订购.*2024-05-24 23:11.*失效时间.*长期有效/);
+  assert.match(text(cards[1]),/旧订购.*旧业务说明/);
+  assert.equal(withClass(cards[1],'services-detail-row')[0].hidden,false);
+  assert.match(text(cards[2]),/无订购时间/);
+  sort.value='oldest';sort.handlers.change();
+  cards=withClass(root,'services-card');
+  assert.match(text(cards[0]),/旧订购/);
+  assert.match(text(cards[2]),/无订购时间/);
+  assert.equal(servicesQueries(env).length,1);
+});
+
 test('unsubscribe opens official impact confirmation without sending SMS, preserving the selected account',async()=>{
   const env=await fixture({servicesQuery:async()=>({data:cancelableServices()}),cancel:async({operation})=>{
     assert.equal(operation,'prepare');return {data:cancellationPlan};
   }});
   assert.equal(withClass(env.get('services-groups'),'services-cancel-action').length,1);
-  const row=withClass(env.get('services-groups'),'services-row')[0];assert.doesNotMatch(text(row),/10元\/月|已订/);assert.match(text(row),/生效 2026-11-01/);
+  const row=withClass(env.get('services-groups'),'services-row')[0];assert.doesNotMatch(text(row),/10元\/月|已订/);assert.match(text(row),/生效时间.*2026-11-01/);
   await withClass(row,'services-cancel-action')[0].click();
   assert.equal(env.get('services-cancel-dialog').open,true);
   assert.deepEqual(env.posts,[{operation:'prepare',body:{login_id:'first',action_id:'server-action'}}]);

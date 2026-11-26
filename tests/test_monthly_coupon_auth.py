@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 from curl_cffi import requests
 
-from monthly_coupon_auth import APP_TOKEN_PATH, PLATFORM, MonthlyCouponAuthError, guizhou_session
+from features.monthly_coupon.auth import APP_TOKEN_PATH, PLATFORM, MonthlyCouponAuthError, guizhou_session
 
 
 ENTRY = PLATFORM + '/static/activity/fixture/index.html?ChannelPosition=TEST'
@@ -41,7 +41,7 @@ class MonthlyCouponAuthenticationTests(unittest.TestCase):
         self.current = copy.deepcopy(SNAPSHOT)
         self.flow, self.session = Mock(), Session()
         self.flow.call.return_value = (200, {'retCode': '000000', 'rspBody': {'token': 'app-token'}}, {})
-        self.from_credentials = patch('monthly_coupon_auth.AppLoginSession.from_credentials', return_value=self.flow).start()
+        self.from_credentials = patch('features.monthly_coupon.auth.AppLoginSession.from_credentials', return_value=self.flow).start()
         self.addCleanup(patch.stopall)
 
     def context(self, entry=ENTRY):

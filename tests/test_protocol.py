@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 from curl_cffi.requests.exceptions import ConnectionError
 
 from app import create_app
-from lingxi_client import Account, LingxiError, chat, cookie_parameters, parse_sse, verify_token
+from features.lingxi.client import Account, LingxiError, chat, cookie_parameters, parse_sse, verify_token
 
 
 class ProtocolTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_sse_utf8_and_limit(self):
         self.assertEqual(list(parse_sse(["data: 你好".encode()])), [("message", "你好")])
-        with patch("lingxi_client.MAX_EVENT_BYTES", 3):
+        with patch("features.lingxi.client.MAX_EVENT_BYTES", 3):
             with self.assertRaises(LingxiError):
                 list(parse_sse(["data: 你好"]))
 
@@ -40,7 +40,7 @@ class ProtocolTests(unittest.TestCase):
             {"code": 0, "data": {"type": "Card", "content": {"title": "结果"}}},
         ])
         account = Account(auth_code="test-code")
-        with patch("lingxi_client.requests.Session", return_value=session):
+        with patch("features.lingxi.client.requests.Session", return_value=session):
             output = list(chat(account, "你好"))
         self.assertEqual("".join(x["text"] for x in output if x["type"] == "delta"), "你好")
         self.assertEqual(output[-1]["type"], "done")
@@ -58,7 +58,7 @@ class ProtocolTests(unittest.TestCase):
             {"code": 0, "data": {"type": "Clear"}},
             {"code": 0, "data": {"type": "Txt", "content": json.dumps({"aBeans": {"q": "问题", "a": "回答"}})}},
         ])
-        with patch("lingxi_client.requests.Session", return_value=session):
+        with patch("features.lingxi.client.requests.Session", return_value=session):
             result = list(chat(Account(auth_code="test"), "测试"))
         self.assertEqual(result[1], {"type": "clear"})
         self.assertEqual(result[2], {"type": "delta", "text": "问题\n回答"})
@@ -66,7 +66,7 @@ class ProtocolTests(unittest.TestCase):
     def test_verifier_rejects_server_auth_failure(self):
         _, session = self.make_response([])
         session.post.return_value.json.return_value = {"rtnCode": "9999", "ok": False}
-        with patch("lingxi_client.requests.Session", return_value=session):
+        with patch("features.lingxi.client.requests.Session", return_value=session):
             with self.assertRaises(LingxiError) as failure:
                 verify_token("bad")
         self.assertTrue(failure.exception.authentication)
@@ -74,7 +74,7 @@ class ProtocolTests(unittest.TestCase):
     def test_auth_error_clears_credentials_even_with_http_200(self):
         response, session = self.make_response([{"code": 401, "msg": "鉴权异常", "data": None}])
         account = Account(auth_code="expired", verified=True)
-        with patch("lingxi_client.requests.Session", return_value=session):
+        with patch("features.lingxi.client.requests.Session", return_value=session):
             with self.assertRaises(LingxiError) as failure:
                 list(chat(account, "测试"))
         self.assertTrue(failure.exception.authentication)
@@ -89,7 +89,7 @@ class ProtocolTests(unittest.TestCase):
             {"code": 0, "data": {"type": "Txt", "content": "second"}},
         ])
         account = Account(auth_code="test-code")
-        with patch("lingxi_client.requests.Session", return_value=session):
+        with patch("features.lingxi.client.requests.Session", return_value=session):
             stream = chat(account, "测试")
             next(stream)
             stream.close()
@@ -104,11 +104,11 @@ class ProtocolTests(unittest.TestCase):
             yield b''
             raise ConnectionError('Connection closed abruptly', code=56)
         response.iter_lines.side_effect = lines
-        with patch('lingxi_client.requests.Session', return_value=session):
+        with patch('features.lingxi.client.requests.Session', return_value=session):
             output = list(chat(Account(auth_code='test'), 'hello'))
         self.assertEqual(output[-1]['type'], 'done')
         response.headers['content-length'] = '9999'
-        with patch('lingxi_client.requests.Session', return_value=session):
+        with patch('features.lingxi.client.requests.Session', return_value=session):
             with self.assertRaises(ConnectionError):
                 list(chat(Account(auth_code='test'), 'hello'))
 
@@ -120,13 +120,13 @@ class ProtocolTests(unittest.TestCase):
             yield b''
             raise ConnectionError('Recv failure: Connection was reset', code=56)
         response.iter_lines.side_effect = lines
-        with patch('lingxi_client.requests.Session', return_value=session):
+        with patch('features.lingxi.client.requests.Session', return_value=session):
             with self.assertRaises(ConnectionError):
                 list(chat(Account(auth_code='test'), 'hello'))
 
     def test_progress_card_alone_is_not_a_successful_answer(self):
         _, session = self.make_response([{'code':0,'data':{'type':'Card','content':{'cardNumber':'-1000','data':{'msg':'working'}}}}])
-        with patch('lingxi_client.requests.Session', return_value=session):
+        with patch('features.lingxi.client.requests.Session', return_value=session):
             with self.assertRaises(LingxiError):
                 list(chat(Account(auth_code='test'), 'hello'))
 
@@ -170,14 +170,14 @@ class WebTests(unittest.TestCase):
 
     @patch("app.AppLoginSession")
     def test_gateway_failure_releases_account_lock(self, factory):
-        from app_login import AppLoginError
+        from workspace.accounts.login import AppLoginError
         factory.return_value.send_sms.side_effect = AppLoginError("网关未通过")
         result = self.client.post("/api/login/sms", json={"phone": "19900000000"})
         self.assertEqual(result.status_code, 400)
         self.assertEqual(self.client.post("/api/logout", json={}).status_code, 200)
 
     def test_invalid_input_and_login_without_sms_never_reach_provider(self):
-        with patch("app_login.requests.Session") as provider:
+        with patch("workspace.accounts.login.requests.Session") as provider:
             for phone in (None, [], "199", "11900000000"):
                 self.assertEqual(self.client.post("/api/login/sms", json={"phone": phone}).status_code, 400)
             self.assertEqual(self.client.post("/api/login", json={"phone": "19900000000", "code": "123456"}).status_code, 400)

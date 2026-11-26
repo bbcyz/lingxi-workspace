@@ -63,6 +63,7 @@ import * as M from './task-model.js';
     const request=++inviteRequest;
     $('wed-checkin-invite-account').textContent=login.phone_masked;
     content.hidden=true;link.value='';command.value='';errorNote.hidden=true;
+    $('wed-checkin-copy-status').textContent='';
     message.textContent='正在获取官方邀请链接和口令…';dialog.showModal();
     try{
       const result=await api('/api/checkin/invite',{login_id:login.id});
@@ -243,7 +244,7 @@ import * as M from './task-model.js';
   $('wed-checkin-refresh').addEventListener('click',()=>runCheckins(accountScope()));
   $('wed-checkin-invite-close').addEventListener('click',()=>$('wed-checkin-invite').close());
   async function copyCheckinInvite(input,label){
-    const message=$('wed-checkin-invite-message'),request=inviteRequest;
+    const message=$('wed-checkin-copy-status'),request=inviteRequest;
     try{
       if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(input.value);
       else{
@@ -253,7 +254,7 @@ import * as M from './task-model.js';
           return;
         }
       }
-      if(request===inviteRequest)message.textContent=`邀请${label}已复制。`;
+      if(request===inviteRequest&&$('wed-checkin-invite').open)message.textContent=`邀请${label}已复制。`;
     }catch{
       if(request!==inviteRequest||!$('wed-checkin-invite').open)return;
       input.focus();input.select();message.textContent=`${label}已选中，请手动复制。`;

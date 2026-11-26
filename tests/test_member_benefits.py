@@ -7,10 +7,10 @@ from unittest.mock import Mock, patch
 from flask import Flask
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from credential_cache import CredentialCache
-from http_transport import RequestException, requests
-from member_benefits_protocol import CampusProtocolError
-from member_benefits import (
+from workspace.accounts.credentials import CredentialCache
+from workspace.http_transport import RequestException, requests
+from features.member_benefits.protocol import CampusProtocolError
+from features.member_benefits.service import (
     ACTIVITY_OFFERS, AUTH, CAMPUS_ACTIVITY, CAMPUS_CHANNEL, CAMPUS_MEMBER,
     CAMPUS_ORDER, CAMPUS_SMS, CATALOG, DISCOUNT_STRATEGY_GROUP, ELIGIBILITY, GROUP_OFFERS, PRODUCT_DETAIL, PRODUCTS, STARBUCKS,
     PLATINUM_ACTIVITY, PLATINUM_ENTRY, PLATINUM_MEMBER, PLATINUM_STRATEGY_GROUP,
@@ -600,7 +600,7 @@ class MemberBenefitsTests(unittest.TestCase):
         with self.assertRaises(MemberBenefitsError) as cooldown:
             self.service.discount_sms('login-a', '2191', preparations[0]['preparation_id'])
         self.assertEqual(cooldown.exception.code, 'MEMBER_RATE_LIMIT')
-        with patch('member_benefits.DISCOUNT_SMS_COOLDOWN', 0):
+        with patch('features.member_benefits.service.DISCOUNT_SMS_COOLDOWN', 0):
             sms = self.service.discount_sms('login-a', '2191', preparations[0]['preparation_id'])
         self.assertTrue(self.service.discount_claim('login-a', sms['operation_id'], '0123')['claimed'])
         self.assertTrue(self.campus_device_requests[-1]['entry'].endswith('?memberId=1447'))
@@ -658,7 +658,7 @@ class MemberBenefitsTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 'MEMBER_CLAIM_STALE')
         self.campus_order_response = {'resultCode': 0}
         app = Flask(__name__)
-        with patch('member_benefits.MemberBenefits', return_value=self.service):
+        with patch('features.member_benefits.service.MemberBenefits', return_value=self.service):
             register_member_benefits(app, self.service.credentials, self.service.cache)
         body = {'login_id': 'login-a', 'operation_id': operation}
         client = app.test_client()
@@ -868,7 +868,7 @@ class MemberBenefitsTests(unittest.TestCase):
 
     def test_discount_claim_returns_only_a_real_official_verification_link(self):
         app = Flask(__name__)
-        with patch('member_benefits.MemberBenefits', return_value=self.service):
+        with patch('features.member_benefits.service.MemberBenefits', return_value=self.service):
             register_member_benefits(app, self.service.credentials, self.service.cache)
         entry = 'https://dev.coc.10086.cn/coc3/gr/static-2c/risk-verify/'
         voice = entry + '#/voiceCaptcha?riskActionLogId=fixture%2Bvalue&language=cn'

@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from flask import Flask
 
-from feature_runtime import feature_scope
+from workspace.feature_runtime import feature_scope
 from recharge.cmcc import SHANGHAI
 from activities.daily_gold.client import DailyGoldError, DEFAULT_CAMPAIGN
 from activities.daily_gold.scheduler import DailyGoldScheduler, DEFAULT_SETTINGS, SCOPE

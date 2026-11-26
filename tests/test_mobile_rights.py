@@ -11,12 +11,12 @@ from unittest.mock import Mock, patch
 
 from flask import Flask
 
-from app_login import AppLoginError
-from credential_cache import CredentialCache
-from http_transport import requests, RequestException
-from mobile_rights import MobileRightsManager, register_mobile_rights
-from mobile_rights_auth import SCOPE,ENTRY,APP_TOKEN_PATH,MobileRightsError,cookie_header,wap_session
-from mobile_rights_client import RightsClient
+from workspace.accounts.login import AppLoginError
+from workspace.accounts.credentials import CredentialCache
+from workspace.http_transport import requests, RequestException
+from features.mobile_rights import MobileRightsManager, register_mobile_rights
+from features.mobile_rights.auth import SCOPE,ENTRY,APP_TOKEN_PATH,MobileRightsError,cookie_header,wap_session
+from features.mobile_rights.client import RightsClient
 from recharge.cmcc import SHANGHAI
 
 NOW=datetime(2026,11,6,12,tzinfo=SHANGHAI)
@@ -194,7 +194,7 @@ class ManagerTests(unittest.TestCase):
         self.accounts=lambda:[{'id':key,'name':key,'status':'active'} for key in self.snapshots]
         self.credentials=lambda key:deepcopy(self.snapshots.get(key))
         self.manager=MobileRightsManager(self.accounts,self.credentials,cache=self.cache,storage=self.storage,connector=self.connector)
-        self.encrypt=patch('mobile_rights_youth.request_params',return_value={'6daEXCun':'synthetic'});self.encrypt.start();self.addCleanup(self.encrypt.stop)
+        self.encrypt=patch('features.mobile_rights.youth.request_params',return_value={'6daEXCun':'synthetic'});self.encrypt.start();self.addCleanup(self.encrypt.stop)
     def test_shared_primary_revision_changes_do_not_replace_the_wap_context(self):
         context=self.manager._context('a');self.snapshots['a'].update(cookie='JSESSIONID=new',credential_revision=99)
         self.assertIs(self.manager._context('a'),context);self.connector.assert_called_once()

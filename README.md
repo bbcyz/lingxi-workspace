@@ -8,8 +8,8 @@
 
 | 方式 | 系统要求 | 启动方法 |
 | --- | --- | --- |
-| Windows 单文件版 | Windows 10/11 x64 | 双击下载的 EXE，界面在默认浏览器打开。 |
-| Windows 文件夹版 | Windows 10/11 x64 | 完整解压下载的 ZIP，再运行 `LingxiWorkspace.exe`。保留同目录的 `_internal`。 |
+| Windows 单文件版 | Windows 10/11 x64 | 双击下载的 EXE 启动后台服务，从托盘选择「打开工具台」。 |
+| Windows 文件夹版 | Windows 10/11 x64 | 完整解压下载的 ZIP，保留同目录的 `_internal`。运行 `LingxiWorkspace.exe` 后，从托盘选择「打开工具台」。 |
 | Android 独立版 | Android 7.0+，ARM64 | 安装 ARM64 APK 后打开「本地工具台」。服务和任务在手机本机运行。 |
 
 Windows 客户端和 Android 独立版都自带运行环境，下载后可直接使用，无需安装 Python 或 Node.js。
@@ -35,7 +35,7 @@ python -X utf8 app.py
 | 灵犀对话 `/lingxi`、定时发送 `/lingxi/tasks` | 按账号进行即时对话，预约单次或每周任务，查看执行记录和回复。 |
 | 网龄 `/net-age` | 查看月月领权益、会员和 AI 权益、生日礼及惊喜礼。惊喜礼按有效账号每日检查，官方确认有次数时自动抽奖。 |
 | 周三充值日 `/recharge/` | 查看周三领取、奖品、任务及连续打卡进度。邀请助力任务可获取官方链接和口令。 |
-| 签到有礼 `/checkin`、微信渠道 `/checkin/wechat` | 查询签到和每周或月末秒杀状态，配置自动任务并查看记录。微信渠道使用独立手机号列表和短信登录。 |
+| 签到有礼 `/checkin`、微信渠道 `/checkin/wechat` | 统一选择当前账号，查看其签到、自动任务和「签到专属 AI 豆」，可核对余额和兑换话费券。批量签到、全账号自动设置使用独立入口。微信渠道使用独立手机号列表和短信登录。 |
 | 星动日 `/star-day` | 查看每日签到和本月权益。符合资格的账号可手动领取、预约抢购或按官方条件赠送权益。 |
 | 每月话费券 `/monthly-coupon` | 贵州移动活动。查看当月直接领取、任务进度和额外领取结果，支持每日自动检查。 |
 | 我的卡券 `/coupons` | 查可用券、历史、折扣和使用条件。支持的券可兑换或用于生成待支付充值订单，付款由你在官方收银台确认。 |
@@ -79,6 +79,8 @@ python -X utf8 app.py
 - 「会员领取」显示已开通会员对应的权益。福利有效期、是否可领及实际到账以官方结果为准。
 - 微信渠道有独立的账号列表、登录凭据和签到记录。退出共享 App 账号不影响已登录的微信渠道账号。自动签到覆盖本渠道已登录的有效号码。
 
+签到有礼中的「签到专属 AI 豆」是独立活动余额，与「我的权益」中的 AI 豆分别查询。已接入的查询、活动浏览、视频、云盘浏览、咪咕登录，以及百度地图、淘宝薅羊毛、菜鸟任务均通过 Python 在本机执行。合作方任务使用本人的有效登录，按账号加密保存；运行无需连接手机。百度地图、淘宝及菜鸟的登录失效后，可通过本地「合作方登录」入口更新。页面逐项显示官方进度和未接入原因，可执行当前账号或全部有效账号；话费券兑换需在本地页面确认。付款任务当前跳过。微信订阅及其余合作 App 的认证或任务回传仍未完整接通，不能仅凭打开链接标记完成。详细范围见 [签到专属 AI 豆协议](docs/protocols/CHECKIN_BEANS_PROTOCOL.md)和[逐项任务结果](docs/protocols/CHECKIN_BEANS_TASKS.md)。
+
 ## 自动任务怎么运行
 
 以下时间均为北京时间。每日签到和检查任务到设定时间后开始，适用的任务会在晚启动或恢复账号时先核对官方进度，再补做当天尚未完成的项目。定时抢购按各自的场次窗口运行。
@@ -105,11 +107,18 @@ python -X utf8 app.py
 
 | 运行方式 | 数据位置 |
 | --- | --- |
-| Windows 客户端 | `%LOCALAPPDATA%\LingxiWorkspace` |
-| 源码服务 | 主数据库为 `.local/accounts.sqlite3`，周三充值日的领取任务另存于 `recharge/.local/schedules.json`。备份时保留两个目录。 |
+| Windows 客户端及 Windows 源码服务 | 共用 `%LOCALAPPDATA%\LingxiWorkspace\data`。主库为 `accounts.sqlite3`，周三充值日辅助文件位于 `recharge/`，迁移前的原库和凭据备份也保存在此目录内。 |
 | Android 客户端 | 应用私有目录。同签名覆盖安装可保留数据，卸载会清除数据。 |
 
-同一账号的有效身份会在相应功能中复用。若官方要求重新验证，进入「账号管理」按提示恢复登录。
+共享账号、合作方登录态、活动会话、任务配置与记录统一存放在上述数据目录，项目内不再保存账号数据。默认首次启动会核对并迁移旧目录：原数据库归档到 `migration-backups/`，不覆盖已有的新库；发现两份非空旧账号库时停止迁移并提示选择来源，不自动混合账号。开发时可用 `LINGXI_DATA_DIR` 指定项目外的独立目录；指定后不自动导入默认目录的数据。
+
+同一账号的有效身份会在相应功能中复用。共享 App 身份需要重新验证时，进入「账号管理」恢复登录；百度地图、淘宝及菜鸟使用的合作方身份，在「签到有礼 → 签到专属 AI 豆 → 合作方登录」中管理：
+
+- **检查并更新**：使用已保存会话查询官方身份，并保存官方返回的 Cookie 更新；不重新扫码或自动发短信。
+- **扫码更新**：旧会话确实失效时，获取官方二维码，在对应官方 App 扫码确认。Python 完成登录交换、核对原绑定身份并加密保存；此后执行任务无需手机连接。
+- **手动更新**：导入本人 Cookie、Cookie JSON 或 Netscape 文件，验证通过才替换旧会话。首次配置百度地图还需本人的 `phone_info`（`cuid`、`sv`），后续更新复用。
+
+更新入口沿用页面当前共享账号。导入失败、账号不匹配或网络异常不会覆盖原登录态；有任务、兑换或待核实提交时暂缓替换。官方要求额外验证时明确提示，不标记更新成功。扫码生成和等待状态已实测，完整的扫码确认及官方身份回查仍需本人完成一次扫码验证。
 
 - 每个手机号在共享账号池中保留一个账号。重新登录会保留账号备注和任务绑定。退出账号会移除该号码的登录凭据，并停止对应的后续任务。
 - App 主会话可使用已有续期凭据在后台维护。活动和卡券的有效会话按各自的认证规则继续使用。官方明确要求短信验证时，由你在对应页面完成验证。
@@ -118,6 +127,8 @@ python -X utf8 app.py
 程序启动后会检查 GitHub 正式版本，之后约每 6 小时检查一次。也可在「平台管理 → 版本更新」手动检查并查看说明。Windows 更新前从托盘退出旧客户端，Android 下载新版后使用同签名 APK 覆盖安装。更新源码时保留数据目录。
 
 「平台管理」还可以关闭单个功能或调整导航顺序。关闭功能会暂停其业务入口和后续自动任务，已有配置和记录可在重新开启后继续使用。
+
+短期和长期活动支持独立的 ZIP 活动包。可在本机「平台管理 → 功能开关」导入、升级或导出，导入后重启工具台生效。目录结构和 Python 接口见[活动包开发规范](docs/ACTIVITY_PLUGIN.md)。
 
 ## 从其他设备访问
 
@@ -135,14 +146,16 @@ Android 独立版的本地服务仅供手机应用使用。Windows 和 Android �
 
 ## 开发与构建
 
+内置业务的 Python 实现在 `features/` 下按工作台菜单分目录。周三充值日使用独立应用目录 `recharge/`，可安装的活动包位于 `activities/`。业务协议说明见 `docs/protocols/`。
+
 - Windows x64 使用 Python 3.12。安装 `requirements-desktop.txt` 后运行 `python build_tools/build_windows.py`，产物位于 `release/`。
-- Android 构建需要配置 JDK、Android SDK 和 Gradle，具体步骤见 [ANDROID.md](ANDROID.md)。
+- Android 构建需要配置 JDK、Android SDK 和 Gradle，具体步骤见 [ANDROID.md](docs/ANDROID.md)。
 
 | 主题 | 文档 |
 | --- | --- |
-| Windows 客户端与使用 | [DESKTOP.md](DESKTOP.md) |
-| 账单、余量与已订业务 | [账单](BILL_PROTOCOL.md) · [余量](USAGE_PROTOCOL.md) · [已订业务](SERVICES_PROTOCOL.md) |
-| 卡券与签到 | [卡券](COUPON_PROTOCOLS.md) · [周三连续打卡](WEDNESDAY_CHECKIN_PROTOCOL.md) · [微信渠道签到](WEB_CHECKIN_PROTOCOL.md) |
+| Windows 客户端与使用 | [DESKTOP.md](docs/DESKTOP.md) |
+| 账单、余量与已订业务 | [账单](docs/protocols/BILL_PROTOCOL.md) · [余量](docs/protocols/USAGE_PROTOCOL.md) · [已订业务](docs/protocols/SERVICES_PROTOCOL.md) |
+| 卡券与签到 | [卡券](docs/protocols/COUPON_PROTOCOLS.md) · [周三连续打卡](docs/protocols/WEDNESDAY_CHECKIN_PROTOCOL.md) · [微信渠道签到](docs/protocols/WEB_CHECKIN_PROTOCOL.md) |
 | 发布与依赖说明 | [发行说明](RELEASE_NOTES.md) · [第三方组件](THIRD_PARTY_NOTICES.md) |
 
 <details>
@@ -150,8 +163,13 @@ Android 独立版的本地服务仅供手机应用使用。Windows 和 Android �
 
 | 源码 | 职责 |
 | --- | --- |
-| `app.py`、`app_login.py`、`login_storage.py` | HTTP 服务、共享账号、登录和本地存储 |
-| `lingxi_client.py`、`lingxi_scheduler.py` | 灵犀文字对话及定时发送 |
+| `app.py`、`desktop.py` | 源码服务、Windows 客户端启动入口 |
+| `workspace/accounts/` | 共享账号、登录、凭据复用与本地存储 |
+| `workspace/`、`workspace/clients/` | 平台管理、网络监听、更新检查和客户端适配 |
+| `features/information/`、`features/lingxi/` | 信息查询、灵犀对话与定时发送 |
+| `features/star_day/`、`features/checkin/`、`features/net_age/` | 星动日、签到有礼、网龄 |
+| `features/monthly_coupon/`、`features/coupons/` | 每月话费券、我的卡券 |
+| `features/mobile_rights/`、`features/member_benefits/` | 移动权益、会员权益 |
 | `recharge/`、`activities/` | 周三充值日和可独立启停的活动模块 |
 | `templates/`、`static/` | 页面、交互和样式 |
 

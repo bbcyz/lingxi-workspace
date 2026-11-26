@@ -9,9 +9,9 @@ from unittest.mock import Mock, patch
 
 from flask import Flask
 
-from feature_control import FeatureControl
-from feature_runtime import FeatureLease, ThreadPoolExecutor, feature_running, feature_scope
-from http_transport import FeatureSession, RequestException
+from workspace.feature_control import FeatureControl
+from workspace.feature_runtime import FeatureLease, ThreadPoolExecutor, feature_running, feature_scope
+from workspace.http_transport import FeatureSession, RequestException
 
 
 class Store:
@@ -95,7 +95,7 @@ class FeatureControlTests(unittest.TestCase):
 
     def test_corrupt_order_is_not_silently_overwritten(self):
         self.store.data['feature-order']=['lingxi','lingxi']
-        from login_storage import LoginStorageError
+        from workspace.accounts.storage import LoginStorageError
         with self.assertRaises(LoginStorageError):FeatureControl(Flask('bad-order'),self.store)
         self.assertEqual(self.store.data['feature-order'],['lingxi','lingxi'])
 
@@ -148,13 +148,13 @@ class FeatureControlTests(unittest.TestCase):
             self.addCleanup(session.close)
             self.control.set_enabled('star-day', False)
             self.control.set_enabled('star-day', True)
-            with patch('http_transport._transport_requests.Session.request') as send:
+            with patch('workspace.http_transport._transport_requests.Session.request') as send:
                 with self.assertRaises(RequestException):
                     session.get('https://unused.invalid/')
                 send.assert_not_called()
             # A new operation can reuse the same session with a fresh lease.
             with feature_scope(FeatureLease(self.control, 'star-day')):
-                with patch('http_transport._transport_requests.Session.request', return_value='ok') as send:
+                with patch('workspace.http_transport._transport_requests.Session.request', return_value='ok') as send:
                     self.assertEqual(session.get('https://unused.invalid/'), 'ok')
                     send.assert_called_once()
 
@@ -165,18 +165,18 @@ class FeatureControlTests(unittest.TestCase):
             session = pool.submit(FeatureSession).result()
             self.addCleanup(session.close)
             self.control.set_enabled('star-day', False)
-            with patch('http_transport._transport_requests.Session.request') as send:
+            with patch('workspace.http_transport._transport_requests.Session.request') as send:
                 with self.assertRaises(RequestException):
                     pool.submit(session.get, 'https://unused.invalid/').result()
                 send.assert_not_called()
 
     def test_unscoped_primary_login_remains_independent(self):
         self.control.set_enabled('star-day', False)
-        with FeatureSession() as session, patch('http_transport._transport_requests.Session.request', return_value='ok'):
+        with FeatureSession() as session, patch('workspace.http_transport._transport_requests.Session.request', return_value='ok'):
             self.assertEqual(session.get('https://unused.invalid/'), 'ok')
 
     def test_disabling_a_live_burst_stops_all_following_rounds(self):
-        from checkin_flash import run_flash_burst
+        from features.checkin.flash import run_flash_burst
         from tests.test_checkin_flash import Prepared
         def reply(_index):
             self.control.set_enabled('star-day', False)
@@ -189,7 +189,7 @@ class FeatureControlTests(unittest.TestCase):
         self.assertEqual(result['attempt_count'], 1)
 
     def test_flash_timers_stop_when_their_feature_is_disabled(self):
-        from checkin_flash import run_flash_burst
+        from features.checkin.flash import run_flash_burst
         from tests.test_checkin_flash import Prepared
 
         def reply(_index):
@@ -214,7 +214,7 @@ class AppFeatureTests(unittest.TestCase):
                  ('checkin','/api/checkin/status'),('monthly-coupon','/api/monthly-coupon/status'),
                  ('coupons','/api/coupons/accounts'),('seven-day','/api/seven-day/status'),
                  ('wechat-checkin','/api/checkin-wechat/status'),('recharge','/recharge/api/accounts')]
-        with patch('http_transport._transport_requests.Session.request', side_effect=AssertionError('unexpected HTTP')):
+        with patch('workspace.http_transport._transport_requests.Session.request', side_effect=AssertionError('unexpected HTTP')):
             for feature_id, url in cases:
                 features.set_enabled(feature_id, False)
                 self.assertEqual(client.get(url).status_code, 423, url)

@@ -4,8 +4,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-from checkin_client import CheckinError
-from checkin_flash import CLOCK_URL, calibrate_flash_clock, run_flash_burst
+from features.checkin.client import CheckinError
+from features.checkin.flash import CLOCK_URL, calibrate_flash_clock, run_flash_burst
 from recharge.cmcc import SHANGHAI
 
 
@@ -62,7 +62,7 @@ class FlashBurstTests(unittest.TestCase):
         session = Session()
         server = datetime(2026, 10, 29, 12, 0, 0, tzinfo=SHANGHAI).timestamp()
         timeline = [value for _ in range(30) for value in (server+0.1, server+0.2)]
-        with patch('checkin_flash.time.time', side_effect=timeline):
+        with patch('features.checkin.flash.time.time', side_effect=timeline):
             result = calibrate_flash_clock(session_factory=lambda: session)
         self.assertEqual((result['state'], result['samples']), ('ready', 30))
         self.assertAlmostEqual(result['offset_ms'], 350, places=3)

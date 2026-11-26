@@ -7,9 +7,9 @@ import re
 from threading import RLock
 from urllib.parse import quote, urlencode, urlsplit
 
-from app_login import AppLoginError, AppLoginSession
-from feature_runtime import ThreadPoolExecutor, feature_running
-from http_transport import RequestException
+from workspace.accounts.login import AppLoginError, AppLoginSession
+from workspace.feature_runtime import ThreadPoolExecutor, feature_running
+from workspace.http_transport import RequestException
 from .cmcc import ActivityClient, ActivityError, ENTRY, SHANGHAI, public_prize
 
 

@@ -6,8 +6,8 @@ from unittest.mock import Mock,patch
 
 from activities.coc_client import CocError
 from activities.net_age_surprise_protocol import SurpriseProtocolError
-from http_transport import requests
-from net_age import NetAge,SURPRISE_LOTTERY
+from workspace.http_transport import requests
+from features.net_age.service import NetAge,SURPRISE_LOTTERY
 
 
 class SurpriseDrawTests(unittest.TestCase):
@@ -45,7 +45,7 @@ class SurpriseDrawTests(unittest.TestCase):
             self.assertEqual(kwargs['headers']['wasmParams'],'["rsa","cipher"]')
             return next(replies)
         self.service._surprise_request=Mock(side_effect=draw)
-        with patch('net_age.time.sleep'):
+        with patch('features.net_age.service.time.sleep'):
             result=self.service.auto_surprise('a')
         self.assertEqual(result['remaining'],0)
         self.assertEqual([d['won']for d in result['draws']],[False,True])
@@ -117,7 +117,7 @@ class SurpriseDrawTests(unittest.TestCase):
     def test_feature_shutdown_prevents_a_following_round(self):
         self.service._surprise_snapshot=Mock(side_effect=[self.state(2),self.state(1,'r1')])
         self.service._surprise_request=Mock(return_value=self.outcome('r1'))
-        with patch('net_age.feature_running',side_effect=[True,False]):
+        with patch('features.net_age.service.feature_running',side_effect=[True,False]):
             with self.assertRaises(CocError)as error:self.service.auto_surprise('a')
         self.assertEqual(error.exception.code,'FEATURE_DISABLED')
         self.assertEqual(self.service._surprise_request.call_count,1)
@@ -126,7 +126,7 @@ class SurpriseDrawTests(unittest.TestCase):
     def test_a_later_failure_keeps_confirmed_wins_for_the_local_status(self):
         self.service._surprise_snapshot=Mock(side_effect=[self.state(2),self.state(1,'r1')])
         self.service._surprise_request=Mock(side_effect=[self.outcome('r1',-2,'测试实物'),{'code':-105}])
-        with patch('net_age.time.sleep'):
+        with patch('features.net_age.service.time.sleep'):
             with self.assertRaises(CocError):self.service.auto_surprise('a')
         progress=self.service.surprise_progress('a')
         self.assertEqual(progress['remaining'],1)
