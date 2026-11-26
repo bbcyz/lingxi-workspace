@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from checkin_client import CheckinError, FLASH_PRODUCT
-from checkin_scheduler import CheckinScheduler, CheckinTaskError
-from login_storage import DatabaseLoginStorage
+from features.checkin.client import CheckinError, FLASH_PRODUCT
+from features.checkin.scheduler import CheckinScheduler, CheckinTaskError
+from workspace.accounts.storage import DatabaseLoginStorage
 from recharge.cmcc import SHANGHAI
 
 
@@ -35,6 +35,7 @@ class CheckinSchedulerTests(unittest.TestCase):
         self.executor = QueueExecutor()
         self.calls = []
         self.flash_options = []
+        self.flash_result = {}
         self.calibration_calls = 0
         self.failure = None
         self.temp = tempfile.TemporaryDirectory()
@@ -53,17 +54,17 @@ class CheckinSchedulerTests(unittest.TestCase):
             def __init__(self, credentials):
                 self.credentials = credentials
 
-            def inspect(self):
+            def inspect(self, *, flash_paused_until=None):
                 return {'date': outer.time.strftime('%Y%m%d'), 'today_state': 'unsigned', 'month_count': 0,
                         'products': [], 'signin_message': '未签到', 'flash_state': 'unavailable'}
 
-            def signin(self, *, before_submit):
+            def signin(self, *, before_submit, flash_paused_until=None):
                 before_submit()
                 outer.assertTrue(any(r.get('submitted') for r in outer.storage.load_checkin_data()['daily'].values()))
                 outer.calls.append(self.credentials())
                 if outer.failure:
                     raise outer.failure
-                return {**self.inspect(), 'state': 'signed', 'today_state': 'signed', 'month_count': 1,
+                return {**self.inspect(flash_paused_until=flash_paused_until), 'state': 'signed', 'today_state': 'signed', 'month_count': 1,
                         'message': '签到成功', 'submitted': True}
 
             def flash(self, product, *, before_submit, **options):
@@ -74,7 +75,7 @@ class CheckinSchedulerTests(unittest.TestCase):
                 before_submit()
                 outer.calls.append(product)
                 return {'state': 'success', 'message': '已领取', 'attempt_count': 2,
-                        'attempts': [{'index': 1, 'state': 'success', 'message': '已领取'}]}
+                        'attempts': [{'index': 1, 'state': 'success', 'message': '已领取'}], **outer.flash_result}
         return CheckinScheduler(lambda key: key, lambda: deepcopy(self.accounts), storage=self.storage,
                                 client_factory=Client, now=lambda: self.time, executor=self.executor,
                                 clock_calibrator=calibrate)
@@ -128,6 +129,96 @@ class CheckinSchedulerTests(unittest.TestCase):
         self.executor.drain()
         self.assertEqual(self.calls, [FLASH_PRODUCT])
         self.assertEqual(self.flash_options[0]['target_at'], target)
+
+    def test_confirmed_monthly_reward_pauses_until_next_month_across_restart_and_settings_change(self):
+        config = {'login_ids': ['a'], 'signin_enabled': False, 'flash_enabled': True, 'product_id': FLASH_PRODUCT}
+        self.scheduler.save(config)
+        self.flash_result = {'flash_kind': 'monthly', 'flash_period': '2026-10', 'flash_state': 'already_claimed',
+                             'flash_next_at': '2026-10-30T12:00:00+08:00'}
+        self.time = self.time.replace(hour=11, minute=58, second=30)
+        self.scheduler.tick()
+        self.executor.drain()
+        self.assertEqual(self.calls, [FLASH_PRODUCT])
+        saved = self.storage.load_checkin_data()
+        task = next(t for t in saved['tasks'].values() if t['kind'] == 'flash')
+        self.assertEqual(task['next_run_at'], '2026-11-01T12:00:00+08:00')
+        self.assertTrue(task['enabled'])
+
+        self.time += timedelta(days=1)
+        self.scheduler = self.create()
+        self.scheduler.save({**config, 'flash_time': '11:59:15'})
+        self.scheduler.tick()
+        self.assertEqual((self.calibration_calls, self.executor.jobs), (1, []))
+        status = self.scheduler.status()
+        self.assertIsNone(status['accounts'][0]['flash_next_at'])
+        self.assertEqual(status['accounts'][0]['flash_state'], 'already_claimed')
+        task = next(t for t in status['tasks'] if t['kind'] == 'flash')
+        self.assertEqual(task['paused_until'], '2026-11-01T00:00:00+08:00')
+        self.assertEqual(task['next_run_at'], '2026-11-01T11:59:15+08:00')
+        self.executor.drain()  # Status polling can still refresh daily sign-in.
+
+        self.time = datetime.fromisoformat(task['next_run_at']) - timedelta(seconds=90)
+        self.flash_result = {}
+        self.scheduler.tick()
+        self.executor.drain()
+        self.assertEqual(self.calls, [FLASH_PRODUCT, FLASH_PRODUCT])
+        self.assertEqual(self.flash_options[-1]['target_at'], datetime.fromisoformat(task['next_run_at']))
+        status = self.scheduler.status()
+        self.assertNotIn('paused_until', next(t for t in status['tasks'] if t['kind'] == 'flash'))
+        self.assertEqual(status['accounts'][0]['flash_state'], 'unknown')
+
+    def test_legacy_weekly_claim_does_not_prepare_early_or_pause_another_account(self):
+        config = {'signin_enabled': False, 'flash_enabled': True, 'product_id': FLASH_PRODUCT}
+        self.scheduler.save({**config, 'login_ids': ['a'], 'flash_time': '00:00'})
+        self.scheduler.data['observations']['a'] = {
+            'flash_kind': 'weekly', 'flash_period': '2026-10-26', 'flash_state': 'already_claimed',
+            'flash_message': '本周已领取', 'date': '20261029',
+        }
+        self.accounts[1]['status'] = 'active'
+        self.scheduler.save({**config, 'login_ids': ['b']})
+        self.scheduler = self.create()
+        tasks = {t['login_id']: t for t in self.scheduler.data['tasks'].values() if t['kind'] == 'flash'}
+        self.assertEqual(tasks['a']['next_run_at'], '2026-11-02T00:00:00+08:00')
+        self.assertEqual(tasks['b']['next_run_at'], '2026-10-29T12:00:00+08:00')
+        self.time = self.time.replace(hour=11, minute=58, second=30)
+        self.scheduler.tick()
+        self.executor.drain()
+        self.assertEqual(self.flash_options[0]['claimed_periods'], {})
+        self.assertEqual(self.calls, [FLASH_PRODUCT])
+        self.accounts[1]['status'] = 'login_required'
+
+        rollover = datetime.fromisoformat(tasks['a']['next_run_at'])
+        self.time = rollover - timedelta(seconds=30)
+        self.scheduler.tick()
+        self.assertEqual((self.calibration_calls, self.executor.jobs), (1, []))
+        self.time = rollover
+        self.scheduler.tick()
+        self.executor.drain()
+        self.assertEqual(self.calls, [FLASH_PRODUCT, FLASH_PRODUCT])
+        self.assertEqual(self.flash_options[-1]['target_at'], rollover)
+
+    def test_claim_discovered_while_a_round_is_waiting_blocks_its_upstream_check(self):
+        self.scheduler.save({'login_ids': ['a'], 'signin_enabled': False, 'flash_enabled': True,
+                             'product_id': FLASH_PRODUCT})
+        self.time = self.time.replace(hour=11, minute=58, second=30)
+        client = Mock(inspect=Mock(return_value={'flash_kind': 'weekly', 'flash_period': '2026-10-26',
+                                                'flash_state': 'already_claimed'}))
+        self.scheduler.client_factory = lambda _: client
+        self.scheduler.refresh_account('a')
+        self.scheduler.tick()
+        self.assertEqual(len(self.executor.jobs), 2)
+        self.executor.drain()
+        client.flash.assert_not_called()
+        client.inspect.assert_called_once_with(flash_paused_until=None)
+        task = next(t for t in self.scheduler.data['tasks'].values() if t['kind'] == 'flash')
+        self.assertEqual(task['next_run_at'], '2026-11-02T12:00:00+08:00')
+        self.assertFalse(task['history'][-1]['submitted'])
+
+        client.inspect.reset_mock()
+        self.time += timedelta(minutes=6)
+        self.scheduler.status()
+        self.executor.drain()
+        client.inspect.assert_called_once_with(flash_paused_until=datetime(2026, 11, 2, tzinfo=SHANGHAI))
 
     def test_new_account_default_concurrency_follows_global_setting_not_legacy_override(self):
         self.configure()
@@ -588,7 +679,7 @@ class CheckinSchedulerTests(unittest.TestCase):
                 self.accounts = [{'id': 'a', 'name': 'test', 'status': 'active'}]
                 self.scheduler = self.create()
                 self.scheduler.status()
-                def inspect():
+                def inspect(*, flash_paused_until=None):
                     self.scheduler.forget('a')
                     self.accounts = []
                     if fail:
@@ -600,6 +691,31 @@ class CheckinSchedulerTests(unittest.TestCase):
                 self.assertEqual(self.scheduler.checked, {})
                 self.assertEqual(self.scheduler.refreshing, set())
                 self.assertEqual(self.scheduler.account_locks, {})
+
+
+    def test_active_account_selection_reads_immediately_without_waiting_for_poll_interval(self):
+        self.scheduler.checked['a']=self.time
+        self.assertTrue(self.scheduler.refresh_account('a'))
+        self.assertEqual(len(self.executor.jobs),1)
+        self.assertTrue(self.scheduler.status()['accounts'][0]['refreshing'])
+        self.executor.drain()
+        self.assertEqual(self.scheduler.data['observations']['a']['today_state'],'unsigned')
+        self.assertFalse(self.scheduler.status()['accounts'][0]['refreshing'])
+        self.assertTrue(self.scheduler.refresh_account('a'))
+        self.assertFalse(self.scheduler.refresh_account('b'))
+        self.assertFalse(self.scheduler.refresh_account('removed'))
+
+    def test_concurrent_account_refreshes_merge_and_follow_up_once(self):
+        inspected=Mock(return_value={'date':self.time.strftime('%Y%m%d'),'today_state':'signed','products':[]})
+        self.scheduler.client_factory=lambda _:Mock(inspect=inspected)
+        self.scheduler.refresh_account('a')
+        self.scheduler.refresh_account('a')
+        self.scheduler.refresh_account('a')
+        self.assertEqual(len(self.executor.jobs),1)
+        self.executor.drain()
+        self.assertEqual(inspected.call_count,2)
+        self.assertEqual(self.scheduler.refresh_again,set())
+        self.assertEqual(self.scheduler.refreshing,set())
 
 
 class CheckinApiTests(unittest.TestCase):
@@ -625,6 +741,14 @@ class CheckinApiTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/checkin/run', json={'kind': 'signin', 'login_ids': ['missing']}).status_code, 400)
         self.assertEqual(self.client.post('/api/checkin/tasks/stop', json={'ids': ['missing']}).status_code, 404)
         self.assertEqual(self.client.post('/api/checkin/tasks/save', json=[]).status_code, 400)
+
+    def test_only_explicit_account_status_requests_force_read(self):
+        scheduler=self.app.extensions['checkin_scheduler']
+        scheduler.refresh_account=Mock(return_value=False)
+        self.assertEqual(self.client.get('/api/checkin/status').status_code,200)
+        scheduler.refresh_account.assert_not_called()
+        self.assertEqual(self.client.get('/api/checkin/status?login_id=a').status_code,200)
+        scheduler.refresh_account.assert_called_once_with('a')
 
     def test_concurrency_setting_is_available_from_signin_page_and_saved_to_status(self):
         page = self.client.get('/checkin').get_data(as_text=True)

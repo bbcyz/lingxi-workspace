@@ -31,7 +31,7 @@ class AndroidTransportTests(unittest.TestCase):
                 return Result()
 
         java = SimpleNamespace(jclass=lambda name: OSError if name == 'java.io.IOException' else Native)
-        spec = importlib.util.spec_from_file_location('android_transport_fixture', Path(__file__).resolve().parents[1] / 'http_transport.py')
+        spec = importlib.util.spec_from_file_location('android_transport_fixture', Path(__file__).resolve().parents[1] / 'workspace/http_transport.py')
         self.module = importlib.util.module_from_spec(spec)
         with patch.dict('os.environ', {'LINGXI_ANDROID': '1'}), patch.dict(sys.modules, {'java': java}):
             spec.loader.exec_module(self.module)
@@ -61,11 +61,11 @@ class AndroidTransportTests(unittest.TestCase):
             self.assertEqual(call[4:], (True, 5, 15))
 
     def test_weekly_flash_clock_calibration_uses_android_options_without_redeeming(self):
-        from checkin_flash import CLOCK_URL, calibrate_flash_clock
+        from features.checkin.flash import CLOCK_URL, calibrate_flash_clock
         self.headers=[['Date','Thu, 29 Oct 2026 04:00:00 GMT']]
         clock=1793246400
         timeline=[value for _ in range(3) for value in (clock+0.1,clock+0.2)]
-        with patch('checkin_flash.time',SimpleNamespace(time=Mock(side_effect=timeline))):
+        with patch('features.checkin.flash.time',SimpleNamespace(time=Mock(side_effect=timeline))):
             result=calibrate_flash_clock(session_factory=self.module.requests.Session,samples=3)
         self.assertEqual(result['state'],'ready')
         self.assertEqual(result['samples'],3)
@@ -90,7 +90,7 @@ class AndroidTransportTests(unittest.TestCase):
             self.assertIn('_zw_kvani5r=sdk-lid', insecure_cookie)
 
     def test_wednesday_progress_recovers_app_session_through_android_transport(self):
-        from credential_cache import CredentialCache
+        from workspace.accounts.credentials import CredentialCache
         from recharge.checkin import ContinuousCheckin
         from recharge.cmcc import ActivityClient, BASE, ENTRY
 

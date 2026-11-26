@@ -15,11 +15,11 @@ from cryptography.fernet import Fernet
 from curl_cffi.requests.exceptions import ConnectionError
 
 from app import create_app
-from app_login import AppCredentialError
-from lingxi_client import LingxiError
-from login_storage import DatabaseLoginStorage, LoginStorageError, _dpapi
-from unified_logins import UnifiedLogins
-from session_maintenance import SessionMaintenance
+from workspace.accounts import macos_keychain, storage as account_storage
+from workspace.accounts.login import AppCredentialError
+from features.lingxi.client import LingxiError
+from workspace.accounts.storage import DatabaseLoginStorage, LoginStorageError, _dpapi
+from workspace.accounts.pool import SessionMaintenance, UnifiedLogins
 from recharge.accounts import AccountManager
 from recharge.cmcc import ActivityClient, ActivityError, SHANGHAI
 from recharge.scheduler import ClaimScheduler
@@ -98,6 +98,73 @@ class DatabaseTests(unittest.TestCase):
         restored = AccountManager(storage=old, database=self.storage)
         self.assertFalse(restored.load_error)
         self.assertEqual(restored.get().name,'旧账号')
+
+
+class MacOSCredentialStorageTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / 'accounts.sqlite3'
+        self.keychain = Mock()
+        self.keychain.read.return_value = None
+
+        def add_key(key):
+            self.keychain.read.return_value = key
+            return True
+
+        self.keychain.add.side_effect = add_key
+        self.enterContext(patch.object(account_storage, 'sys', SimpleNamespace(platform='darwin')))
+        self.enterContext(patch.object(account_storage, 'os', SimpleNamespace(name='posix', environ={})))
+        self.enterContext(patch.object(macos_keychain, '_keychain', return_value=self.keychain))
+        self.storage = DatabaseLoginStorage(self.path)
+
+    def test_macos_persists_and_restores_accounts_and_activity_credentials(self):
+        account = UnifiedLogins(self.storage).remember('19900000001', 'fixture-cookie', {}, 'fixture-token')
+        credentials = {'token': 'fixture-activity-token'}
+        self.storage.save_credentials('fixture-activity', account.id, credentials)
+
+        reopened = DatabaseLoginStorage(self.path)
+        restored = UnifiedLogins(reopened).get_id(account.id)
+        self.assertEqual(restored.cookie, 'fixture-cookie')
+        self.assertEqual(reopened.load_credentials('fixture-activity', account.id), credentials)
+        self.keychain.add.assert_called_once()
+        for file in self.path.parent.glob('accounts.sqlite3*'):
+            self.assertNotIn(b'fixture-cookie', file.read_bytes())
+            self.assertNotIn(b'fixture-activity-token', file.read_bytes())
+
+    def test_macos_uses_existing_key_after_a_concurrent_creation(self):
+        existing_key = b'k' * 32
+        self.keychain.read.side_effect = [None, existing_key, existing_key]
+        self.keychain.add.side_effect = None
+        self.keychain.add.return_value = False
+
+        encrypted = self.storage.protect(b'fixture')
+
+        self.assertEqual(self.storage.unprotect(encrypted), b'fixture')
+        self.keychain.add.assert_called_once()
+
+    def test_macos_missing_key_keeps_the_previous_record(self):
+        account = UnifiedLogins(self.storage).remember('19900000001', 'fixture-cookie', {}, '')
+        with closing(sqlite3.connect(self.path)) as connection:
+            old_payload = connection.execute('SELECT payload FROM account_sessions').fetchone()[0]
+        self.keychain.read.return_value = None
+        self.keychain.add.reset_mock()
+
+        restored = UnifiedLogins(DatabaseLoginStorage(self.path))
+        self.assertIsNone(restored.get_id(account.id))
+        self.assertIn('找不到凭据加密密钥', restored.warning)
+        self.keychain.add.assert_not_called()
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute('SELECT payload FROM account_sessions').fetchone()[0], old_payload)
+
+    def test_macos_rejects_corrupt_and_foreign_ciphertexts(self):
+        encrypted = self.storage.protect(b'fixture')
+        tampered = encrypted[:-1] + bytes([encrypted[-1] ^ 1])
+
+        with self.assertRaisesRegex(LoginStorageError, '无法解密'):
+            self.storage.unprotect(tampered)
+        with self.assertRaisesRegex(LoginStorageError, '无法读取此记录的 macOS 加密格式'):
+            self.storage.unprotect(b'foreign-platform-ciphertext')
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows encrypted account database')

@@ -1,7 +1,8 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id), dialog=$('platforms-delete-dialog');
-  const labels={running:'运行中',expired:'已到期 · 已停止',deleted:'已移除'};
+  const labels={running:'运行中',expired:'已到期 · 已停止',deleted:'已移除',pending:'待重启生效','load-failed':'加载失败'};
+  const packageButton=$('platforms-package-import'),packageFile=$('platforms-package-file');
   let selected=null,working=false,loading=false,refreshPending=false,draggingId=null,rowsData=[],defaultOrder=[];
   const arrow=direction=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${direction==='up'?'m6 14 6-6 6 6':'m6 10 6 6 6-6'}"/></svg>`;
   const date=value=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
@@ -16,6 +17,9 @@
       const row=document.createElement('tr'),name=document.createElement('td');
       name.append(element('strong','',platform.title));
       if(platform.navigation==='checkin')name.append(element('small','','入口位于“签到有礼”内'));
+      if(platform.version)name.append(element('small','',`版本 ${platform.version}`));
+      if(platform.pending_version)name.append(element('small','',platform.state==='pending'?`版本 ${platform.pending_version}`:`${platform.pending_version} 待重启生效`));
+      if(platform.failed_version)name.append(element('small','',`${platform.failed_version} 加载失败，请检查活动包或导入更新版本`));
       if(platform.state==='deleted'&&platform.deleted_at)name.append(element('small','',`移除于 ${date(platform.deleted_at)}`));
       const soldOut=platform.state==='expired'&&platform.end_reason==='sold_out';
       const state=document.createElement('td'),badge=element('span',`platforms-badge ${platform.enabled===false?'disabled':platform.state}`,platform.removal_pending?'已停止 · 待清理':soldOut?'红包已领完 · 已停止':platform.state==='running'&&platform.enabled===false?'已关闭':labels[platform.state]);
@@ -31,6 +35,9 @@
       }else switchCell.append(element('span','platforms-muted','—'));
       const actions=element('td','platforms-actions');
       if(platform.active){const link=element('a','platforms-open','打开活动');link.href=platform.home;actions.append(link);}
+      if(packageButton&&platform.state!=='deleted'&&(platform.version||platform.pending_version||platform.failed_version)){
+        const link=element('a','platforms-open','导出活动包');link.href=`/api/platforms/${encodeURIComponent(platform.id)}/package`;actions.append(link);
+      }
       if(platform.can_delete!==false&&(platform.state!=='deleted'||platform.removal_pending)){const remove=element('button','platforms-remove',platform.removal_pending?'继续清理':'永久移除');remove.type='button';remove.disabled=working;remove.addEventListener('click',()=>openDelete(platform));actions.append(remove);}
       else if(platform.state==='deleted')actions.append(element('span','platforms-muted','已清理'));
       const sortCell=element('td','platforms-order-cell'),position=sortable.indexOf(platform.id);
@@ -66,7 +73,7 @@
   }
   async function refresh(){
     if(loading||working||draggingId){refreshPending=true;return;}loading=true;refreshPending=false;$('platforms-refresh').disabled=true;
-    try{const [response,featureResponse]=await Promise.all([fetch('/api/platforms'),fetch('/api/features')]);const result=await response.json(),featureResult=await featureResponse.json();if(!response.ok||!featureResponse.ok)throw new Error(result.error||featureResult.error||'暂时无法读取功能状态');if(working||draggingId){refreshPending=true;return;}defaultOrder=featureResult.default_order||featureResult.features.filter(row=>row.state!=='deleted').map(row=>row.id);const byId=new Map(result.platforms.map(row=>[row.id,row]));render([...featureResult.features.map(row=>({...byId.get(row.id),...row})),...result.platforms.filter(row=>!featureResult.features.some(feature=>feature.id===row.id))]);feedback(result.warning||'');}
+    try{const [response,featureResponse]=await Promise.all([fetch('/api/platforms'),fetch('/api/features')]);const result=await response.json(),featureResult=await featureResponse.json();if(!response.ok||!featureResponse.ok)throw new Error(result.error||featureResult.error||'暂时无法读取功能状态');if(working||draggingId){refreshPending=true;return;}defaultOrder=featureResult.default_order||featureResult.features.filter(row=>row.state!=='deleted').map(row=>row.id);const byId=new Map(result.platforms.map(row=>[row.id,row]));render([...featureResult.features.map(row=>({...row,...byId.get(row.id)})),...result.platforms.filter(row=>!featureResult.features.some(feature=>feature.id===row.id))]);feedback(result.warning||'');}
     catch(error){feedback(error.message,true);}
     finally{loading=false;$('platforms-refresh').disabled=false;if(refreshPending&&!working&&!draggingId){refreshPending=false;void refresh();}}
   }
@@ -98,6 +105,21 @@
     catch(error){$('platforms-delete-error').textContent=error.message;$('platforms-delete-error').hidden=false;}
     finally{working=false;for(const button of dialog.querySelectorAll('button'))button.disabled=false;$('platforms-delete-submit').textContent='永久移除';await refresh();}
   });
+  if(packageButton){
+    packageButton.addEventListener('click',()=>{if(!working)packageFile.click();});
+    packageFile.addEventListener('change',async()=>{
+      const file=packageFile.files[0];packageFile.value='';if(!file||working)return;
+      const status=$('platforms-package-feedback');
+      status.classList.toggle('error',false);status.textContent='正在校验并导入活动包…';status.hidden=false;
+      packageButton.disabled=true;working=true;render(rowsData);
+      try{
+        const response=await fetch('/api/platforms/packages',{method:'POST',headers:{'Content-Type':'application/zip'},body:file});
+        const result=await response.json();if(!response.ok)throw new Error(result.error||'活动包导入失败');
+        status.textContent=result.message;
+      }catch(error){status.classList.toggle('error',true);status.textContent=error.message;}
+      finally{packageButton.disabled=false;working=false;await refresh();}
+    });
+  }
   $('platforms-order-reset').addEventListener('click',()=>saveOrder([...defaultOrder]));
   $('platforms-refresh').addEventListener('click',refresh);window.addEventListener('focus',refresh);refresh();setInterval(()=>{if(!document.hidden)refresh();},5000);
 })();

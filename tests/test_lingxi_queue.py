@@ -8,8 +8,8 @@ from unittest.mock import Mock
 
 from cryptography.fernet import Fernet
 
-from lingxi_scheduler import LingxiScheduler,TaskError,SHANGHAI
-from login_storage import DatabaseLoginStorage,LoginStorageError
+from features.lingxi.scheduler import LingxiScheduler,TaskError,SHANGHAI
+from workspace.accounts.storage import DatabaseLoginStorage,LoginStorageError
 
 
 class QueueTests(unittest.TestCase):

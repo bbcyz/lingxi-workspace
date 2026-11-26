@@ -9,11 +9,11 @@ from unittest.mock import Mock, patch
 from flask import Flask
 from jinja2 import DictLoader
 
-from app_login import AppLoginError
-from bill_query import BillError, BillQueries, BILLS_PATH, BALANCE_PATH, normalize_bill, register_bills
-from usage_query import register_usage
-from services_query import register_services
-from feature_control import FeatureControl
+from workspace.accounts.login import AppLoginError
+from features.information.bills import BillError, BillQueries, BILLS_PATH, BALANCE_PATH, normalize_bill, register_bills
+from features.information.usage import register_usage
+from features.information.services import register_services
+from workspace.feature_control import FeatureControl
 from recharge.cmcc import SHANGHAI
 
 NOW = datetime(2026, 11, 6, 9, 45, tzinfo=SHANGHAI)
@@ -56,6 +56,17 @@ class BillQueryTests(unittest.TestCase):
                 item=normalize_bill(body,{},'202611',NOW)['sections'][0]['items'][0]
                 self.assertFalse(item.get('compact_details',False));self.assertEqual(len(item['children']),len(details))
 
+    def test_rebate_preserves_the_official_coupon_name_date_and_amount(self):
+        body=deepcopy(BILL)
+        detail=body['billPayInfoMsgRes']['payInfoListRes'][0]['payInfoRes'][0]
+        detail['payDetailRes']=[{'billPayDetailName':'50元话费券','billPayDetailtime':'2025-08-08',
+                                 'billPayDetailnum':'10.00'}]
+        bill=normalize_bill({'historyBillInfo':[body]}, {}, '202611', NOW)
+        item=bill['sections'][0]['items'][0]
+        self.assertFalse(item.get('compact_details',False))
+        self.assertEqual(item['children'][0]['children'][0],{'name':'50元话费券','amount':'10.00',
+                                                             'date':'2025-08-08','children':[]})
+
     def test_bill_and_balance_share_one_connection_but_next_query_is_isolated(self):
         service,flow,_=self.make_service()
         original=flow.call.side_effect;transports=[]
@@ -63,7 +74,7 @@ class BillQueryTests(unittest.TestCase):
             transports.append(flow.transport)
             return original(path,payload)
         flow.call.side_effect=record
-        with patch('bill_query.requests.Session') as create:
+        with patch('features.information.bills.requests.Session') as create:
             first,second=Mock(),Mock()
             create.return_value.__enter__.side_effect=[first,second]
             service.query('a','202611');service.query('b','202611')

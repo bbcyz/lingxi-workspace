@@ -7,7 +7,7 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 
-import alipay_h5 as h5
+import features.coupons.alipay_h5 as h5
 
 ORDER = 'app_id=fixture&method=alipay.trade.app.pay&biz_content=%7B%22out_trade_no%22%3A%22fixture%22%7D&sign=a%2Bb%2Fc%3D'
 WEB = 'https://mclient.alipay.com/cashier/mobilepay.htm?awid=fixture%2Bticket'
@@ -44,7 +44,7 @@ class Gateway:
 
 class AlipayH5Tests(unittest.TestCase):
     def request(self, gateway):
-        with patch('alipay_h5.PUBLIC_KEY', gateway.public):
+        with patch('features.coupons.alipay_h5.PUBLIC_KEY', gateway.public):
             return h5.AlipayH5(session_factory=lambda: gateway).payment_url(ORDER)
 
     def test_official_framed_exchange_returns_untouched_https_url_without_payment(self):

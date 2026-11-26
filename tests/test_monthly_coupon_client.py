@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 from curl_cffi import requests
 
-from monthly_coupon_client import ENTRY, MonthlyCouponClient, MonthlyCouponError, TASKS
+from features.monthly_coupon.client import ENTRY, MonthlyCouponClient, MonthlyCouponError, TASKS
 
 
 class Response:
@@ -339,7 +339,7 @@ class MonthlyCouponClientTests(unittest.TestCase):
                 response.headers['Location'] = 'https://unrelated.example/task'
                 return response
         visitor = Visitor()
-        with patch('monthly_coupon_client.requests.Session', return_value=visitor):
+        with patch('features.monthly_coupon.client.requests.Session', return_value=visitor):
             with self.assertRaises(MonthlyCouponError) as error:
                 MonthlyCouponClient._visit(TASKS[0][4])
         self.assertEqual(error.exception.code, 'TASK_REDIRECT')

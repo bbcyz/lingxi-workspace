@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>周日追剧盛宴 · 本地工具台</title><link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/static/portal.css"><link rel="stylesheet" href="/static/workspace.css">
+  <link rel="stylesheet" href="/activities/sunday-drama/static/sunday-drama.css">
+  <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script>
+  <script src="/activities/sunday-drama/static/sunday-drama.js" defer></script>
+  <link rel="stylesheet" href="/static/mobile.css?v=mobile-1"><script src="/static/mobile.js?v=mobile-1" defer></script>
+  {% include 'theme_head.html' %}
+</head>
+<body class="workspace-app" data-workspace="sunday-drama">
+<main class="portal-shell drama-shell">
+  <header class="drama-heading"><div><span class="drama-eyebrow">短期活动 · 每周日抽奖</span><h1>周日追剧盛宴</h1><p id="drama-period">正在读取活动规则…</p></div><div class="drama-actions"><button id="drama-refresh" class="secondary" type="button">刷新进度</button><button id="drama-settings-open" class="secondary" type="button">自动设置</button><button id="drama-all" class="primary" type="button">全部账号执行</button></div></header>
+  <p id="drama-announcement" class="drama-notice" hidden></p><p id="drama-feedback" class="drama-feedback" role="status" aria-live="polite" hidden></p>
+  <label class="drama-mobile-account" for="drama-account-select">共享账号<select id="drama-account-select"></select></label>
+  <div class="drama-layout">
+    <aside class="workspace-account-rail drama-panel drama-account-panel" aria-label="共享账号"><div class="drama-account-heading"><h2>共享账号 <span id="drama-account-count">—</span></h2><button type="button" class="quiet" data-account-window>管理</button></div><div id="drama-accounts" class="workspace-account-list"></div><p class="drama-muted">与其他功能共用登录</p></aside>
+    <div id="drama-content" class="drama-content" aria-busy="false">
+      <section class="drama-panel drama-hero" aria-labelledby="drama-current-account">
+        <div class="drama-hero-top"><div><p id="drama-current-account">请选择账号</p><h2>攒机会，周日抽好礼</h2><p id="drama-draw-window" class="drama-muted">抽奖机会每周一 00:00 清零</p></div><span class="drama-play-icon" aria-hidden="true"><svg viewBox="0 0 40 40"><rect x="5" y="9" width="30" height="25" rx="7"/><path d="m15 4 5 5 5-5 M17 16l9 6-9 6z"/></svg></span></div>
+        <dl class="drama-metrics"><div><dt>剩余抽奖机会</dt><dd><strong id="drama-remain">—</strong><small>次</small></dd></div><div><dt>今日视频任务</dt><dd id="drama-video-day">—</dd></div><div><dt>本周视频任务</dt><dd id="drama-video-week">—</dd></div></dl>
+        <div class="drama-hero-bottom"><p id="drama-run-status" role="status">先查询官方进度，再执行任务。</p><div class="drama-actions"><button id="drama-run" class="primary" type="button" disabled>完成可做任务</button><button id="drama-draw" class="secondary" type="button" disabled>周日抽奖</button></div></div>
+      </section>
+      <div class="drama-grid">
+        <section class="drama-panel"><header class="drama-panel-heading"><div><h2>每周领机会任务</h2><p>已完成任务不重复提交，未接通任务展示具体原因。</p></div><span id="drama-task-count" class="count-chip">—</span></header><ul id="drama-tasks" class="drama-task-list"><li class="drama-empty">正在读取该账号任务…</li></ul></section>
+        <div class="drama-side-stack">
+          <section class="drama-panel"><header class="drama-panel-heading"><div><h2>看视频领机会</h2><p>实际播放满 5 分钟后核对结果</p></div></header><div class="drama-panel-body"><p id="drama-video-summary" class="drama-muted">周一至周六每天 1 次，周日 2 次。</p><button id="drama-video" class="secondary drama-wide" type="button" disabled>执行 5 分钟视频任务</button></div></section>
+          <section class="drama-panel"><header class="drama-panel-heading"><div><h2>邀请好友得奖品</h2><p>邀请本月未登录中国移动 APP 的好友</p></div></header><div class="drama-panel-body"><p class="drama-invite-progress">本月已成功邀请 <strong id="drama-invite-count">—</strong> 人</p><ul id="drama-invite-rewards" class="drama-reward-list"></ul><p class="drama-muted">3、5、7 人对应不同奖励，每月只能选择一档领取。</p><button id="drama-invite" class="secondary drama-wide" type="button" disabled>获取邀请口令与海报</button></div></section>
+          <section class="drama-panel"><header class="drama-panel-heading"><div><h2>签到与会员福利</h2></div></header><div class="drama-panel-body"><p id="drama-signin-state" class="drama-muted">正在读取官方公告…</p><p id="drama-membership-status" class="drama-muted">可核对本号相关订购；活动办理与权益领取接口仍待确认，不自动付费。</p><ul id="drama-membership-items" class="drama-reward-list"></ul><button id="drama-membership" class="secondary drama-wide" type="button">查询现有订购</button></div></section>
+        </div>
+      </div>
+      <section class="drama-panel drama-prizes"><header class="drama-panel-heading"><div><h2>我的活动奖品</h2><p>仅展示官方返回的中奖记录</p></div><a href="/coupons">我的卡券 ↗</a></header><ul id="drama-prizes" class="drama-prize-list"><li class="drama-empty">查询后查看奖品。</li></ul></section>
+      <details class="drama-panel drama-details"><summary>执行记录</summary><ol id="drama-records"></ol></details>
+      <details class="drama-panel drama-details"><summary>完整活动规则</summary><p id="drama-rules" class="drama-rules"></p></details>
+      <p id="drama-sync" class="drama-muted drama-sync">北京时间 · 页面定时刷新本地记录</p>
+    </div>
+  </div>
+</main>
+<dialog id="drama-settings" aria-labelledby="drama-settings-title"><form id="drama-settings-form"><header class="drama-dialog-heading"><h2 id="drama-settings-title">自动任务设置</h2><button type="button" class="close quiet" data-drama-close="drama-settings" aria-label="关闭自动设置">×</button></header><label class="drama-toggle"><span>自动执行免费任务与周日抽奖</span><input id="drama-enabled" type="checkbox" role="switch"></label><label class="drama-field">每天开始时间 · 北京时间<input id="drama-task-time" type="time" required></label><label class="drama-field">周日自动抽奖时间 · 北京时间<input id="drama-draw-time" type="time" required></label><label class="drama-toggle"><span>包含实际播放 5 分钟视频</span><input id="drama-video-enabled" type="checkbox" role="switch"></label><p class="drama-muted">覆盖全部有效共享账号，晚启动补做；新增或恢复登录后自动纳入。结果不确定时先查询，不重复提交。任务运行需要本地服务持续联网。</p><p id="drama-settings-error" class="drama-error" role="alert"></p><footer class="drama-actions"><button type="button" class="secondary" data-drama-close="drama-settings">取消</button><button class="primary" type="submit">保存设置</button></footer></form></dialog>
+<dialog id="drama-confirm" aria-labelledby="drama-confirm-title"><form id="drama-confirm-form"><header class="drama-dialog-heading"><h2 id="drama-confirm-title">确认领取邀请奖励</h2></header><p id="drama-confirm-text"></p><p class="drama-notice">每月仅可领取一档，领取后其他档位不可再领取。</p><footer class="drama-actions"><button type="button" class="secondary" data-drama-close="drama-confirm">取消</button><button type="submit" class="primary">确认领取</button></footer></form></dialog>
+<dialog id="drama-share" aria-labelledby="drama-share-title"><header class="drama-dialog-heading"><div><h2 id="drama-share-title">邀请好友助力</h2><p id="drama-share-account" class="drama-muted"></p></div><button class="close quiet" type="button" data-drama-close="drama-share" aria-label="关闭邀请信息">×</button></header><p class="drama-muted">将口令或海报分享给本月未登录中国移动 APP 的好友。</p><label class="drama-field">邀请链接<input id="drama-invite-url" type="text" readonly></label><button id="drama-copy-url" class="secondary" type="button" disabled>复制链接</button><label class="drama-field">邀请口令<textarea id="drama-command" rows="4" readonly></textarea></label><button id="drama-copy-command" class="secondary" type="button" disabled>复制口令</button><p id="drama-copy-status" role="status"></p><a id="drama-poster-link" target="_blank" rel="noopener" hidden>查看与保存官方邀请海报 ↗</a><img id="drama-poster" alt="官方生成的好友邀请海报" hidden></dialog>
+</body>
+</html>

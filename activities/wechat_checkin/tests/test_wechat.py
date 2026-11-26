@@ -6,11 +6,10 @@ from unittest import TestCase, main
 from unittest.mock import Mock, patch
 
 from flask import Flask
-from credential_cache import CredentialCache
+from workspace.accounts.credentials import CredentialCache
 from activities.checkin_common.client import WebCheckinError, _identity, SCOPE as WEB_SCOPE
 from activities.checkin_common.scheduler import WebCheckinScheduler
-from activities.wechat_checkin.auth import SCOPE, WechatLoginManager, client_for
-from activities.wechat_checkin.plugin import register
+from activities.wechat_checkin.plugin import SCOPE, WechatLoginManager, client_for, register
 from recharge.cmcc import SHANGHAI
 
 SNAPSHOT = {'id':'a','phone':'13800000001','cookie':'APP-ONLY'}

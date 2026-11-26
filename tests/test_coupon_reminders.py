@@ -3,9 +3,9 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-from coupon_client import CouponError, _item
-from coupon_reminders import CouponReminders, SCOPE
-from coupon_use import CouponUseManager
+from features.coupons.client import CouponError, _item
+from features.coupons.reminders import CouponReminders, SCOPE
+from features.coupons.use import CouponUseManager
 from recharge.cmcc import SHANGHAI
 from tests.test_coupon_use import Environment, Storage, LOGIN, ROW
 
@@ -150,7 +150,7 @@ class CouponReminderTests(unittest.TestCase):
         env.rule = {'saleType':'10','saleCode':'10~1000:1'}
         env.amount_rule = {'minAmount':'20','maxAmount':'1000'}
         manager = CouponUseManager(env.provider, self.storage)
-        with patch('coupon_use.CouponClient', side_effect=env.client):
+        with patch('features.coupons.use.CouponClient', side_effect=env.client):
             manager.query(LOGIN)
             manager.query(LOGIN)
         self.assertEqual(manager.reminders.summary([LOGIN], {}, NOW)['total'], 0, '19/20 is not under 9.1折')

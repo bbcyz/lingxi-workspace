@@ -12,8 +12,8 @@ from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
 from flask import Flask
-from login_storage import DatabaseLoginStorage
-from network_access import NetworkSettings, create_http_server, local_addresses, register_network
+from workspace.accounts.storage import DatabaseLoginStorage
+from workspace.network_access import NetworkSettings, create_http_server, local_addresses, register_network
 
 
 def address(value, identity='selected', name='所选网卡'):
@@ -77,7 +77,7 @@ class LiveListenerTests(TestCase):
         if len(available)<2:self.skipTest('Needs two assigned IPv4 addresses to simulate a NIC address change')
         self.first,self.second=available[:2]
         self.rows=[address(self.first),address(self.second,'not-selected')]
-        self.inventory=patch('network_access.interface_addresses',side_effect=lambda:deepcopy(self.rows))
+        self.inventory=patch('workspace.network_access.interface_addresses',side_effect=lambda:deepcopy(self.rows))
         self.inventory.start();self.addCleanup(self.inventory.stop)
         self.environment=patch.dict(os.environ)
         self.environment.start();os.environ.pop('LINGXI_HOST',None);self.addCleanup(self.environment.stop)
@@ -170,7 +170,7 @@ class LiveListenerTests(TestCase):
         def fail_new(target,**kwargs):
             if target[0]==self.second:raise OSError('simulated address not ready')
             return create(target,**kwargs)
-        with patch('network_access.socket.create_server',side_effect=fail_new):
+        with patch('workspace.network_access.socket.create_server',side_effect=fail_new):
             self.rows=[address(self.second)]
             self.server.changed.set()
             self.wait_for(lambda:bool(self.manager.warning))
@@ -203,7 +203,7 @@ class LivePortTests(TestCase):
         environment.start();self.addCleanup(environment.stop)
         os.environ.pop('LINGXI_HOST',None)
         os.environ.pop('LINGXI_PORT',None)
-        inventory=patch('network_access.interface_addresses',return_value=[])
+        inventory=patch('workspace.network_access.interface_addresses',return_value=[])
         inventory.start();self.addCleanup(inventory.stop)
         self.port_changed=Mock()
         self.server=create_http_server(self.app,0,on_port_changed=self.port_changed)

@@ -29,7 +29,6 @@ class Controller:
 
 def register(app, credentials, accounts, storage):
     controller = Controller(credentials, accounts, storage, app.extensions['credential_cache'])
-    app.extensions['daily_gold_login_restored'] = controller.scheduler.login_restored
     blueprint = Blueprint('daily_gold', __name__, template_folder='templates', static_folder='static',
                           static_url_path='/activities/daily-gold/static')
 
@@ -38,7 +37,7 @@ def register(app, credentials, accounts, storage):
         if controller.deleted:
             raise DailyGoldError('该活动已永久移除。', 'PLATFORM_DELETED', 410)
 
-    @app.errorhandler(DailyGoldError)
+    @blueprint.errorhandler(DailyGoldError)
     def error_handler(error):
         return jsonify(error=str(error), code=error.code), error.status
 

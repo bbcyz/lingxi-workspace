@@ -1,4 +1,6 @@
 {
+  "format_version": 1,
+  "version": "1.0.0",
   "id": "seven-day",
   "title": "7日打卡分百万",
   "home": "/seven-day",

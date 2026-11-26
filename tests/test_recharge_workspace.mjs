@@ -183,8 +183,12 @@ test('only an account waiting for today’s assistance can copy its link and com
   assert.equal(get('wed-checkin-invite-account').textContent,'138****0001');
   const url=get('wed-checkin-invite-url').value;
   assert.match(url,/^https:\/\/h\.app\.coc\.10086\.cn\//);
+  const help=get('wed-checkin-invite-message').textContent;
   await get('wed-checkin-invite-copy').click();
+  assert.equal(get('wed-checkin-copy-status').textContent,'邀请链接已复制。');
   await get('wed-checkin-command-copy').click();
+  assert.equal(get('wed-checkin-copy-status').textContent,'邀请口令已复制。');
+  assert.equal(get('wed-checkin-invite-message').textContent,help);
   assert.deepEqual(copied,[url,'官方示例口令']);
   assert.deepEqual(calls.filter(call=>call.body),[{path:'/recharge/api/checkin/invite',body:{login_id:'a'}}]);
 });

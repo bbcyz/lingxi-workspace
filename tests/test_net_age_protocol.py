@@ -116,7 +116,7 @@ class NetAgeProtocolTests(unittest.TestCase):
 
     def test_tunnel_keeps_slider_sms_and_claim_on_the_same_connection_path(self):
         with patch('activities.net_age_transport._proxy',return_value='http://127.0.0.1:1') as proxy, \
-                patch('http_transport.FeatureSession.request',return_value='fixture') as send:
+                patch('workspace.http_transport.FeatureSession.request',return_value='fixture') as send:
             session=NetAgeSession()
             try:
                 for url in sorted(BUSINESS_URLS):
@@ -130,7 +130,7 @@ class NetAgeProtocolTests(unittest.TestCase):
 
     def test_member_initialization_and_claim_share_transport_and_preserve_headers(self):
         with patch('activities.net_age_transport._proxy',return_value='http://127.0.0.1:1'), \
-                patch('http_transport.FeatureSession.request',return_value='fixture') as send:
+                patch('workspace.http_transport.FeatureSession.request',return_value='fixture') as send:
             session=NetAgeSession(member=True)
             session.headers.update({'User-Agent':'member-fixture','Origin':'https://dev.coc.10086.cn'})
             original=session.headers

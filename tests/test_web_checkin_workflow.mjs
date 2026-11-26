@@ -16,7 +16,7 @@ class Element {
 }
 const walk=(element,text)=>element.textContent===text?element:element.children.map(child=>walk(child,text)).find(Boolean);
 const flush=async()=>{for(let i=0;i<12;i++)await new Promise(resolve=>setImmediate(resolve));};
-const script=fs.readFileSync(new URL('../activities/checkin_common/static/web-checkin.js',import.meta.url),'utf8');
+const script=fs.readFileSync(new URL('../activities/wechat_checkin/static/web-checkin.js',import.meta.url),'utf8');
 
 async function fixture({accountCount=0,pauseRuns=false,wechat=false}={}){
   const elements=new Map(),calls=[],timers=[],pending=[],events={};

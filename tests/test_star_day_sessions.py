@@ -8,11 +8,11 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from http_transport import requests
-from login_storage import DatabaseLoginStorage
+from workspace.http_transport import requests
+from workspace.accounts.storage import DatabaseLoginStorage
 from recharge.cmcc import SHANGHAI
-from star_day_auth import StarDaySessionCache, star_day_session, StarDayAuthError
-from star_day_client import StarDayClient, StarDayError
+from features.star_day.auth import StarDaySessionCache, star_day_session, StarDayAuthError
+from features.star_day.client import StarDayClient, StarDayError
 
 
 class CampaignSessionTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class CampaignSessionTests(unittest.TestCase):
         self.flow.call.return_value = (200, {'retCode':'000000'}, {})
         self.denied, self.auth_calls = False, 0
         self.clients = []
-        self.patch = patch('star_day_auth.AppLoginSession.from_credentials', return_value=self.flow)
+        self.patch = patch('features.star_day.auth.AppLoginSession.from_credentials', return_value=self.flow)
         self.patch.start()
         self.addCleanup(self.patch.stop)
 
@@ -106,7 +106,7 @@ class CampaignSessionTests(unittest.TestCase):
     def test_restored_campaign_uses_ajax_headers_without_desktop_navigation_defaults(self):
         with self.session():pass
         self.cache = StarDaySessionCache(self.storage, now=lambda:self.stamp)
-        with patch('star_day_auth.requests.Session',return_value=self.factory()) as factory:
+        with patch('features.star_day.auth.requests.Session',return_value=self.factory()) as factory:
             with star_day_session(lambda:deepcopy(self.snapshot),cache=self.cache,allow_login=False) as (client,_):
                 self.assertEqual(client.headers['X-Requested-With'],'XMLHttpRequest')
                 self.assertEqual(client.headers['Accept'],'application/json, text/javascript, */*; q=0.01')

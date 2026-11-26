@@ -11,7 +11,7 @@ from .cmcc import ActivityError, ENTRY, ROOT
 from .accounts import AccountManager
 from .scheduler import ClaimScheduler
 from .checkin import ContinuousCheckin
-from network_access import allowed_lan_host
+from workspace.network_access import allowed_lan_host
 
 
 def create_app(client=None, *, manager=None, scheduler=None, app_login_provider=None, app_logout_provider=None,
@@ -19,8 +19,9 @@ def create_app(client=None, *, manager=None, scheduler=None, app_login_provider=
     app = Flask(__name__)
     app.config.update(SECRET_KEY=secrets.token_hex(32), MAX_CONTENT_LENGTH=48 * 1024,
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
-    manager = manager or AccountManager(storage=None if client else ROOT / '.local/accounts.json', default_client=client)
-    scheduler = scheduler or ClaimScheduler(manager, storage=None if client else ROOT / '.local/schedules.json')
+    from runtime_paths import RECHARGE_DATA_DIR
+    manager = manager or AccountManager(storage=None if client else RECHARGE_DATA_DIR/'accounts.json', default_client=client)
+    scheduler = scheduler or ClaimScheduler(manager, storage=None if client else RECHARGE_DATA_DIR/'schedules.json')
     app.extensions.update(activity=manager.get().client, accounts=manager, scheduler=scheduler)
 
     def bind_credentials(account, login_id):

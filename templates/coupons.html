@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>我的卡券 · 本地工具台</title><link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/static/portal.css"><link rel="stylesheet" href="/static/workspace.css"><link rel="stylesheet" href="/static/coupons.css">
-  <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/static/coupons.js?v=recharge-relogin-531022-20261123" defer></script>
+  <link rel="stylesheet" href="/static/portal.css"><link rel="stylesheet" href="/static/workspace.css"><link rel="stylesheet" href="/static/coupons.css?v=redemption-help-icon">
+  <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/static/coupons.js?v=redemption-help-icon" defer></script>
   <link rel="stylesheet" href="/static/mobile.css?v=mobile-1">
   <script src="/static/mobile.js?v=mobile-1" defer></script>
   {% include 'theme_head.html' %}
@@ -35,11 +35,17 @@
 </main>
 <dialog id="coupons-details" aria-labelledby="coupons-details-title"><div class="coupons-dialog-heading"><div><span id="coupons-details-category" class="coupons-detail-category"></span><h2 id="coupons-details-title">卡券详情</h2></div><button id="coupons-details-close" class="close quiet" type="button" aria-label="关闭卡券详情">×</button></div><div class="coupons-details-value"><strong id="coupons-details-amount"></strong><span id="coupons-details-state"></span></div><dl id="coupons-details-meta" class="coupons-details-meta"></dl><section class="coupons-details-description"><h3>使用说明</h3><p id="coupons-details-description"></p></section><p class="coupons-details-note">支持的卡券可从列表操作栏兑换话费或用于充值，付款由你自行完成。</p></dialog>
 <dialog id="coupons-use" aria-labelledby="coupons-use-title"><form id="coupons-use-form">
-  <div class="coupons-dialog-heading"><div><span class="coupons-detail-category">使用卡券</span><h2 id="coupons-use-title">正在准备…</h2></div><button id="coupons-use-close" class="close quiet" type="button" aria-label="关闭用券窗口">×</button></div>
+  <div class="coupons-dialog-heading">
+    <div><span id="coupons-use-category" class="coupons-detail-category">使用卡券</span><h2 id="coupons-use-title">正在准备…</h2></div>
+    <div class="coupons-dialog-tools">
+      <div id="coupons-redemption-help" class="coupons-redemption-help"></div>
+      <button id="coupons-use-close" class="close quiet" type="button" aria-label="关闭用券窗口">×</button>
+    </div>
+  </div>
   <dl id="coupons-use-meta" class="coupons-details-meta"></dl>
-  <section class="coupons-use-description"><h3>官方说明</h3><p id="coupons-use-description">正在读取卡券使用方式，请稍候。</p></section>
+  <p id="coupons-payment-context" class="coupons-payment-context" hidden></p>
   <div id="coupons-use-sms-field" class="coupons-use-field" hidden><label for="coupons-use-code">短信验证码</label><div class="coupons-use-sms-row"><input id="coupons-use-code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="输入短信验证码"><button id="coupons-use-sms" class="secondary" type="button">获取验证码</button></div></div>
-  <div id="coupons-use-charge-field" class="coupons-use-field" hidden><label>最优充值方案</label><input id="coupons-use-charge" type="hidden"><p id="coupons-use-best" class="coupons-best-plan"></p><p class="coupons-use-note">按官方规则选择优惠比例最高、实付更少的方案，生成订单后获取官方支付链接。</p></div>
+  <div id="coupons-use-charge-field" class="coupons-use-field" hidden><label>最优充值方案</label><input id="coupons-use-charge" type="hidden"><p id="coupons-use-best" class="coupons-best-plan"></p></div>
   <p id="coupons-use-message" class="coupons-use-message" role="status" hidden></p>
   <section id="coupons-use-verification" class="coupons-use-field" hidden><h3>请完成官方安全验证</h3><p class="coupons-use-note">完成验证后会自动继续，无需再次点击。</p><div id="coupons-use-captcha"></div></section>
   <p id="coupons-use-error" class="coupons-feedback coupons-use-error" role="alert" hidden></p>
@@ -48,17 +54,35 @@
     <p id="coupons-relogin-message" class="coupons-use-note" role="status"></p>
     <button id="coupons-relogin-open" class="primary" type="button">打开账号管理</button>
   </section>
-  <section id="coupons-payment-panel" class="coupons-payment-panel" aria-label="支付宝支付链接" hidden>
-    <h3>支付宝付款</h3><p class="coupons-use-note">进入官方收银台后，请核对金额并手动完成付款。</p>
-    <p id="coupons-payment-scan-tip" class="coupons-payment-scan-tip"><strong>请使用手机浏览器扫码打开</strong><span>不支持支付宝 APP“扫一扫”；也可点击“打开网页付款”。</span></p>
-    <div class="coupons-payment-body"><img id="coupons-payment-qr" class="coupons-payment-qr" alt="网页付款二维码，请使用浏览器扫码，支付宝 APP 无法直接扫描" aria-describedby="coupons-payment-scan-tip" hidden>
-      <div class="coupons-payment-details"><a id="coupons-use-payment" class="workspace-primary coupons-payment-link" rel="noopener noreferrer" target="_blank" hidden>打开网页付款</a>
-        <label for="coupons-payment-url">支付链接</label><textarea id="coupons-payment-url" readonly rows="3" spellcheck="false" aria-label="支付宝支付链接"></textarea>
-        <button id="coupons-copy-payment" class="secondary" type="button">复制支付链接</button>
+  <section id="coupons-payment-panel" class="coupons-payment-panel" aria-label="订单金额与付款方式" hidden>
+    <dl class="coupons-payment-amounts">
+      <div><dt>实付</dt><dd><strong id="coupons-payment-amount"></strong> 元</dd></div>
+      <div id="coupons-credit-field" hidden><dt>预计到账</dt><dd><strong id="coupons-credit-amount"></strong> 元</dd></div>
+    </dl>
+    <div class="coupons-payment-body">
+      <figure class="coupons-payment-scan">
+        <img id="coupons-payment-qr" class="coupons-payment-qr" alt="支付宝网页付款二维码" aria-describedby="coupons-payment-scan-tip" hidden>
+        <figcaption id="coupons-payment-scan-tip"><strong>用手机浏览器扫码</strong><span>支付宝「扫一扫」暂不支持</span></figcaption>
+      </figure>
+      <div class="coupons-payment-details">
+        <div id="coupons-payment-links" class="coupons-payment-links"><a id="coupons-use-payment" class="workspace-primary coupons-payment-link" rel="noopener noreferrer" target="_blank" hidden>打开网页付款</a><button id="coupons-copy-payment" class="secondary" type="button">复制支付链接</button></div>
+        <p id="coupons-payment-copy-status" class="coupons-payment-copy-status" role="status"></p>
+        <div id="coupons-payment-copy-fallback" class="coupons-payment-copy-fallback" hidden>
+          <label for="coupons-payment-url">手动复制链接</label><textarea id="coupons-payment-url" readonly rows="2" spellcheck="false"></textarea>
+        </div>
       </div>
     </div>
   </section>
-  <button id="coupons-use-get-payment" class="secondary" type="button" hidden>获取支付链接</button>
+  <div id="coupons-payment-retry" class="coupons-payment-retry"><button id="coupons-use-get-payment" class="quiet" type="button" hidden>获取支付链接</button></div>
+  <div id="coupons-use-details-slot">
+    <details id="coupons-use-details" class="coupons-use-description" hidden>
+      <summary id="coupons-use-details-title">卡券详情</summary>
+      <div class="coupons-use-details-content">
+        <dl id="coupons-use-details-meta" class="coupons-details-meta"></dl>
+        <div id="coupons-use-instructions"><h3>使用说明</h3><p id="coupons-use-description"></p></div>
+      </div>
+    </details>
+  </div>
   <div class="coupons-use-actions"><button id="coupons-use-recheck" class="secondary" type="button" hidden>核实上次结果</button><button id="coupons-use-retry" class="secondary" type="button" hidden>重新准备兑换</button><button id="coupons-use-cancel" class="secondary" type="button">取消</button><button id="coupons-use-confirm" class="primary" type="submit" disabled>请稍候</button></div>
 </form></dialog>
 <p id="coupons-toast" class="coupons-toast" role="status" aria-live="polite" hidden></p>

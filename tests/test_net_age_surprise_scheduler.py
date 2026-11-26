@@ -6,8 +6,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from activities.coc_client import CocError
-from login_storage import LoginStorageError
-from net_age_surprise_scheduler import END_AT, SCOPE, SurpriseScheduler
+from workspace.accounts.storage import LoginStorageError
+from features.net_age.surprise_scheduler import END_AT, SCOPE, SurpriseScheduler
 from recharge.cmcc import SHANGHAI
 
 
@@ -357,7 +357,7 @@ class SurpriseSchedulerTests(unittest.TestCase):
         with self.assertRaises(CocError):
             self.scheduler.run('a')
         self.scheduler.feature_enabled = lambda: True
-        with patch('net_age_surprise_scheduler.feature_running', return_value=False):
+        with patch('features.net_age.surprise_scheduler.feature_running', return_value=False):
             self.assertEqual(self.scheduler.tick(), 0)
         self.scheduler.tick()
         self.queue.drain()

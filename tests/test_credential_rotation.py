@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from recharge.cmcc import ActivityClient, ActivityError
-from unified_logins import UnifiedLogins
+from workspace.accounts.pool import UnifiedLogins
 
 
 class MemoryStorage:

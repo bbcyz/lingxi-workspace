@@ -9,8 +9,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from flask import Flask
-from login_storage import DatabaseLoginStorage
-from platform_manager import PlatformManager, PlatformError
+from workspace.accounts.storage import DatabaseLoginStorage
+from workspace.platform_manager import PlatformManager, PlatformError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,7 +29,7 @@ class PlatformManagerTests(unittest.TestCase):
         self.app.config['TESTING'] = True
         self.clock = datetime(2026, 11, 1, tzinfo=timezone.utc)
         self.credentials, self.accounts = Mock(), Mock()
-        self.importer = patch('platform_manager.import_module', side_effect=self.module)
+        self.importer = patch('workspace.platform_manager.import_module', side_effect=self.module)
         self.imported = self.importer.start()
         self.addCleanup(self.importer.stop)
 
@@ -291,7 +291,7 @@ class PlatformManagerTests(unittest.TestCase):
     def test_file_in_use_keeps_tombstone_and_can_retry_cleanup(self):
         folder = self.activity()
         manager = self.manager()
-        with patch('platform_manager.shutil.rmtree', side_effect=PermissionError('file in use')):
+        with patch('workspace.platform_manager.shutil.rmtree', side_effect=PermissionError('file in use')):
             with self.assertRaises(PlatformError):
                 manager.delete('sample')
         self.assertTrue(folder.exists())

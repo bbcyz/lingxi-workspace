@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import Mock
-from desktop_browser import DefaultBrowserWindow,wait_for_page
+from workspace.clients.desktop_browser import DefaultBrowserWindow,wait_for_page
 import threading
 import time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -75,4 +75,21 @@ print(json.dumps({'database':str(DATA_DIR/'accounts.sqlite3'),'activity':str(REC
             result=subprocess.run([sys.executable,'-X','utf8','-c',
                 'import sys;sys.frozen=True;from runtime_paths import DATA_DIR;print(DATA_DIR)'],
                 capture_output=True,text=True,env=env,check=True)
-            self.assertEqual(Path(result.stdout.strip()),Path(folder)/'LingxiWorkspace')
+            self.assertEqual(Path(result.stdout.strip()),Path(folder)/'LingxiWorkspace/data')
+
+    def test_source_uses_the_same_external_data_directory_as_packaged_client(self):
+        with tempfile.TemporaryDirectory() as folder:
+            env={key:value for key,value in os.environ.items() if key!='LINGXI_DATA_DIR'}
+            env['LOCALAPPDATA']=folder
+            result=subprocess.run([sys.executable,'-X','utf8','-c',
+                'from runtime_paths import DATA_DIR,RECHARGE_DATA_DIR;print(DATA_DIR);print(RECHARGE_DATA_DIR)'],
+                capture_output=True,text=True,env=env,check=True)
+            paths=result.stdout.strip().splitlines()
+            self.assertEqual(Path(paths[0]),Path(folder)/'LingxiWorkspace/data')
+            self.assertEqual(Path(paths[1]),Path(folder)/'LingxiWorkspace/data/recharge')
+
+    def test_project_internal_data_override_is_rejected_before_creating_accounts(self):
+        env={**os.environ,'LINGXI_DATA_DIR':str(Path(__file__).resolve().parents[1]/'.local/forbidden-account-storage')}
+        result=subprocess.run([sys.executable,'-X','utf8','-c','import runtime_paths'],capture_output=True,text=True,env=env)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('账号数据目录必须位于项目目录外',result.stderr)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .accounts import atomic_json
 from .cmcc import ActivityError, SHANGHAI, parse_server_time
-from feature_runtime import feature_running
+from workspace.feature_runtime import feature_running
 
 ACTIVE = {'preparing', 'armed', 'running', 'cancelling'}
 QUICK_CHECK_LIMIT = 20
@@ -144,7 +144,7 @@ class ClaimScheduler:
                 self.jobs[job['account_id']] = job
         except (OSError, ValueError, TypeError, KeyError, ActivityError):
             self.jobs.clear()
-            self.load_error = '定时配置读取失败，已保留原文件，请检查 .local/schedules.json'
+            self.load_error = '定时配置读取失败，已保留原文件，请检查统一数据目录中的 recharge/schedules.json'
 
     def _save(self):
         if self.storage and not self.load_error:

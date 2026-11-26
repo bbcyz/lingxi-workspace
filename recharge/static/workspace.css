@@ -2,7 +2,9 @@
 
 .wed-checkin-rules{padding:14px 22px;margin:0;color:#879bb6;font-size:12px;line-height:1.9;border-bottom:1px solid #edf1f7}.wed-checkin-table{table-layout:auto}.wed-checkin-table td:nth-child(3){max-width:260px}.wed-checkin-enable{display:flex;align-items:center;gap:8px;margin:20px 0}.wed-checkin-enable input{width:auto}.wed-checkin-time{display:grid;gap:8px;margin:16px 0}.wed-checkin-time input{width:100%;padding:10px;border:1px solid #dbe5f3;border-radius:6px}
 
+#wed-checkin-invite { width: min(460px, calc(100% - 24px)); }
 .wed-invite-content { display: grid; gap: 8px; margin-block-start: 12px; }
 .wed-invite-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
 .wed-invite-field :is(input,textarea) { width: 100%; min-width: 0; }
 .wed-invite-field button { white-space: nowrap; }
+.wed-invite-copy-status { min-block-size: 1.5em; margin: 0; line-height: 1.5; }

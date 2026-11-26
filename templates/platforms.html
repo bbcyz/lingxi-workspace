@@ -9,6 +9,11 @@
   <section id="updates-settings" class="platforms-panel update-settings" aria-label="版本更新"></section>
   <section id="feature-settings" class="platforms-panel" aria-label="功能开关">
     <div class="platforms-panel-heading"><h2>功能开关 <span id="platforms-count">0</span></h2><p>关闭后停止后台任务与业务请求，配置和记录保留；重新开启立即生效。</p></div>
+    {% if manage_packages %}<div class="platforms-order-toolbar platforms-package-toolbar" id="platforms-package-tools">
+      <p>可导入可信来源的活动 ZIP 包。同标识的较新版本会保留原配置和记录，重启工具台后生效。</p>
+      <input id="platforms-package-file" type="file" accept=".zip,application/zip" hidden>
+      <button id="platforms-package-import" class="secondary" type="button">导入活动包</button>
+    </div><p id="platforms-package-feedback" class="platforms-feedback platforms-package-feedback" role="status" hidden></p>{% endif %}
     <div class="platforms-order-toolbar"><p>拖动或使用上下按钮调整顺序，自动保存并同步导航；子功能保留原有归属。</p><button id="platforms-order-reset" class="secondary" type="button" disabled>恢复默认顺序</button></div>
     <div class="platforms-table-wrap"><table class="platforms-table"><thead><tr><th scope="col">功能名称</th><th scope="col">类型</th><th scope="col">运行状态</th><th scope="col">结束时间 · 北京时间</th><th scope="col">启用</th><th scope="col">排序</th><th scope="col">操作</th></tr></thead><tbody id="platforms-rows"><tr><td colspan="7" class="platforms-empty">正在读取功能…</td></tr></tbody></table></div>
   </section>

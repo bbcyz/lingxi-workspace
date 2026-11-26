@@ -54,7 +54,6 @@ class Controller:
 def register(app, credentials, accounts, storage):
     controller = Controller(credentials, accounts, storage, app.extensions.get('app_identity_recover'),
                             app.extensions.get('credential_cache'))
-    app.extensions['seven_day_login_restored'] = controller.scheduler.login_restored
     blueprint = Blueprint('seven_day', __name__, template_folder='templates', static_folder='static',
                           static_url_path='/activities/seven-day/static')
 
@@ -65,7 +64,7 @@ def register(app, credentials, accounts, storage):
         if request.method == 'POST':
             controller.scheduler._available()
 
-    @app.errorhandler(SevenDayError)
+    @blueprint.errorhandler(SevenDayError)
     def error_handler(error):
         return jsonify(error=str(error), code=error.code), error.status
 

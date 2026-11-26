@@ -4,19 +4,68 @@
   const accountStates = {active:'已登录',login_required:'需重新登录',restoring:'正在恢复',retry:'等待重连'};
   const loginRequiredCodes = new Set(['APP_LOGIN_REQUIRED','APP_SESSION_EXPIRED','BILL_LOGIN_REQUIRED','BILLS_LOGIN_REQUIRED','USAGE_LOGIN_REQUIRED','SERVICES_LOGIN_REQUIRED']);
   const moneyFields = ['total','payable','original','discount','rebate','balance'];
+  const refreshingResults = '正在刷新，显示上次查询结果…';
   const flowOrder = ['国内通用流量','定向流量','国内其他流量','WLAN流量'];
   const formatter = new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  const planControl=$('usage-plan-control'),planTrigger=$('usage-plan'),planPopover=$('usage-plan-popover');
   let accounts = [], months = [], loginId = '', month = '', bill = null, errorMessage = '', errorCode = '';
   let usage = null, usageErrorMessage = '', usageErrorCode = '', informationErrorMessage = '';
   let services = null, servicesErrorMessage = '', servicesErrorCode = '', servicesCategory = '';
   let loading = false, usageLoading = false, servicesLoading = false, refreshing = false, refreshPending = false, requestVersion = 0, usageRequestVersion = 0, servicesRequestVersion = 0;
   const expanded = new Set(), usageExpanded = new Set(), serviceDetails = new Set();
   let cancellation = null, cancelPending = false, cancelVersion = 0, cancelTimer = null, cancelCloseTimer = null;
+  let renderedPlanUsage,planPinned=false;
 
   function node(tag,className='',text){const item=document.createElement(tag);item.className=className;if(text!==undefined)item.textContent=text;return item;}
+  function loadingPlaceholder(message,count){
+    const placeholder=node('div','information-loading');
+    placeholder.append(node('span','bills-visually-hidden',message));
+    for(let index=0;index<count;index++){
+      const block=node('div','information-skeleton');block.setAttribute('aria-hidden','true');placeholder.append(block);
+    }
+    return placeholder;
+  }
+  function usagePlaceholderCard(){
+    const blank='　';
+    const card=node('div','usage-overview-card usage-card-placeholder');
+    const reading=node('div','usage-reading'),remaining=node('div','usage-remaining');
+    remaining.append(node('span','usage-remaining-label',blank),node('span','usage-quantity',blank));
+    const counters=node('dl','usage-overview-counters');
+    for(let index=0;index<2;index++){
+      const line=node('div');line.append(node('dt','',blank),node('dd','',blank));counters.append(line);
+    }
+    reading.append(remaining,counters);
+    const summary=node('div','usage-card-summary'),meter=node('div','usage-meter');
+    meter.append(node('span','usage-meter-ring'));
+    summary.append(reading,meter);
+    const footer=node('div','usage-group usage-attached');
+    footer.append(node('div','usage-group-heading',blank));
+    card.append(node('h3','usage-overview-title',blank),summary,footer);
+    return card;
+  }
   function monthText(value){return value ? `${value.slice(0,4)} 年 ${Number(value.slice(4))} 月` : '月度账单';}
   function amountText(value){return value===null||value===undefined||value===''?'—':String(value);}
   function hasBillDetails(item){return Boolean(item.children?.length)&&item.compact_details!==true;}
+  function isActivityRebate(section,item){return section.name==='代付与返费明细'&&item.name==='活动返费';}
+  function showBillRebate(item){
+    const total=amountText(item.amount);
+    $('bills-rebate-detail-total').textContent=total==='—'?total:`${total.replace(/^-/,'')} 元`;
+    const details=item.compact_details?[]:(item.children||[]).flatMap(child=>child.children?.length?child.children:[child]);
+    $('bills-rebate-details').replaceChildren(...details.map(detail=>{
+      const row=node('div'),name=node('dt','',detail.name);
+      if(detail.date)name.append(node('small','',detail.date));
+      const amount=amountText(detail.amount);
+      row.append(name,node('dd','',amount==='—'?amount:`${amount} 元`));
+      return row;
+    }));
+    $('bills-rebate-empty').hidden=Boolean(details.length);
+    $('bills-rebate-dialog').showModal();
+  }
+  function setPlanOpen(open){
+    planPopover.hidden=!open;
+    planTrigger.setAttribute('aria-expanded',String(open));
+    if(!open)planPinned=false;
+  }
   function applyAccount(account,accountId){
     if(account?.id!==accountId)return;
     const current=accounts.find(item=>item.id===accountId);
@@ -44,7 +93,10 @@
       const label=node('span','bills-account-label');
       label.append(node('strong','',account.name||account.phone_masked),node('span','bills-account-state '+(account.status==='active'?'active':'attention'),accountStates[account.status]||'暂不可用'));
       button.append(label,node('small','',account.phone_masked));
-      button.addEventListener('click',()=>{loginId=account.id;renderAccounts();return loadInformation();});
+      button.addEventListener('click',()=>{
+        const sameAccount=loginId===account.id;
+        loginId=account.id;renderAccounts();return loadInformation(sameAccount);
+      });
       return button;
     }));
   }
@@ -100,7 +152,9 @@
       const resource=!hasAmounts(item)&&children.length===1&&!children[0].children?.length&&hasAmounts(children[0])?children[0]:item;
       const title=node('div','usage-item-title');title.append(node('h4','',item.name));detail.append(title);
       if(hasAmounts(resource)){
-        const values=counters(resource,'usage-item-counters',[['used','已用'],['remaining','剩余'],['total','总量']]);
+        const usedFields=[['used','已用']];
+        const fields=resource.used_only?usedFields:[...usedFields,['remaining','剩余'],['total','总量']];
+        const values=counters(resource,'usage-item-counters',fields);
         if(resource.remaining_percent!==null&&resource.remaining_percent!==undefined){
           const track=node('div','usage-progress');track.setAttribute('role','progressbar');track.setAttribute('aria-label',`${item.name}剩余比例`);
           track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax','100');track.setAttribute('aria-valuenow',resource.remaining_percent);
@@ -108,7 +162,7 @@
         }
         detail.append(values);
         if(resource.display){
-          const original=node('details','usage-original');original.append(node('summary','','查看原始用量'),counters(resource,'usage-original-counters',undefined,true));title.append(original);
+          const original=node('details','usage-original');original.append(node('summary','','查看原始用量'),counters(resource,'usage-original-counters',resource.used_only?usedFields:undefined,true));title.append(original);
         }
       }
       const meta=node('div','usage-item-meta');
@@ -117,6 +171,23 @@
         meta.append(metadata(resource,{...inherited,...item}));
       }else if(children.length){
         const nested=node('div','usage-item-children');nested.append(...children.map(child=>detailItem(child,{...inherited,...item})));detail.append(nested);
+      }
+      return detail;
+    }
+    function planItem(item,inherited={scope:'套餐说明'}){
+      const detail=node('article','usage-item usage-plan-item');
+      const title=node('div','usage-plan-line');title.append(node('h4','',item.name));
+      if(item.unlimited||item.total!=null&&item.total!=='')title.append(counters(item,'usage-plan-total',[['total','总量']]));
+      detail.append(title);
+      const context=metadata(item,{
+        ...inherited,
+        scope:item.scope==='套餐包含（非实时余量）'?item.scope:inherited.scope,
+        description:item.description===item.name?item.name:inherited.description,
+      });
+      if(context.children.length){const meta=node('div','usage-item-meta');meta.append(context);detail.append(meta);}
+      if(item.children?.length){
+        const children=node('div','usage-plan-children');
+        children.append(...item.children.map(child=>planItem(child,item)));detail.append(children);
       }
       return detail;
     }
@@ -149,14 +220,15 @@
       }
       return card;
     }
-    const allGroups=(usage?.groups||[]).filter(group=>group.name!=='其他资源');
-    const planIndex=allGroups.findIndex(group=>group.name==='套餐信息'&&group.items[0]?.name);
-    const plan=$('usage-plan');
-    plan.hidden=planIndex===-1;
-    plan.textContent=plan.hidden?'':allGroups[planIndex].items[0].name;
-    plan.onclick=plan.hidden?null:()=>{
-      usageExpanded.add(planIndex);renderUsage();$(`usage-detail-${planIndex}`).focus();
-    };
+    const allGroups=(usage?.groups||[]).filter(group=>group.name!=='其他资源'&&group.name!=='套餐信息');
+    if(renderedPlanUsage!==usage){
+      renderedPlanUsage=usage;
+      const plans=(usage?.groups||[]).filter(group=>group.name==='套餐信息').flatMap(group=>group.items);
+      setPlanOpen(false);
+      planControl.hidden=!plans.length;
+      planTrigger.textContent=plans[0]?.name||'';
+      planPopover.replaceChildren(...plans.map(item=>planItem(item)));
+    }
     function rank(item){
       if(item.key!=='flow')return flowOrder.length+1;
       const index=flowOrder.indexOf(item.name);
@@ -166,14 +238,21 @@
     const smsCount=overviewItems.filter(item=>item.key==='sms').length;
     const attachedGroups=new Set();
     const flowRow=node('div','usage-card-row'), otherRow=node('div','usage-card-row');
+    const showPreview=usageLoading&&!usage;
+    if(showPreview){
+      flowRow.setAttribute('aria-hidden','true');otherRow.setAttribute('aria-hidden','true');
+      flowRow.append(usagePlaceholderCard(),usagePlaceholderCard(),usagePlaceholderCard());
+      otherRow.append(usagePlaceholderCard(),usagePlaceholderCard());
+    }
     for(const item of overviewItems){
       const exhausted=item.remaining_percent!=null&&item.remaining!=null&&Number(item.remaining)===0;
       const card=node('article','usage-overview-card'+(exhausted?' usage-exhausted':''));
       card.setAttribute('data-usage-kind',item.key);
       card.append(node('h3','usage-overview-title',item.name));
       const reading=node('div','usage-reading'),remaining=node('div','usage-remaining');
-      remaining.append(node('span','usage-remaining-label','可用余量'),quantity(item,'remaining'));
-      reading.append(remaining,counters(item,'usage-overview-counters',[['used','已用'],['total','总量']]));
+      remaining.append(node('span','usage-remaining-label',item.used_only?'已用流量':'可用余量'),quantity(item,item.used_only?'used':'remaining'));
+      reading.append(remaining);
+      if(!item.used_only)reading.append(counters(item,'usage-overview-counters',[['used','已用'],['total','总量']]));
       const summary=node('div','usage-card-summary');summary.append(reading);card.append(summary);
       if(item.remaining_percent!=null){
         const percent=Number(item.remaining_percent);
@@ -210,9 +289,10 @@
       (item.key==='flow'?flowRow:otherRow).append(card);
     }
     const overview=[flowRow,otherRow].filter(row=>row.children.length);
+    if(showPreview)overview.unshift(node('span','bills-visually-hidden','正在查询该账号套餐余量…'));
     const groups=allGroups.flatMap((group,index)=>attachedGroups.has(index)?[]:[detailGroup(group,index)]);
     if(!overview.length&&!groups.length){
-      const message=usageLoading?'正在查询该账号套餐余量…':!selected?(refreshing?'正在读取共享账号…':'共享账号池为空，请从左侧“账号管理”登录。'):usageErrorMessage?'本次余量查询未完成，点击“刷新信息”重试。':usage?usage.message||'官方暂未提供套餐余量。':'选择账号后查询套餐余量。';
+      const message=!selected?(refreshing?'正在读取共享账号…':'共享账号池为空，请从左侧“账号管理”登录。'):usageErrorMessage?'本次余量查询未完成，点击“刷新信息”重试。':usage?usage.message||'官方暂未提供套餐余量。':'选择账号后查询套餐余量。';
       overview.push(node('p','bills-empty',message));
     }
     $('usage-overview').replaceChildren(...overview);
@@ -220,7 +300,7 @@
     $('usage-groups').replaceChildren(...groups);
     $('usage-groups').hidden=!groups.length;
     const notes=usage?.notes||[];$('usage-notes-list').replaceChildren(...notes.map(note=>node('li','',note)));$('usage-notes').hidden=!notes.length;
-    $('usage-sync').textContent=usageLoading?'正在查询官方套餐余量…':usage?.queried_at?'北京时间 · 最近查询 '+formatter.format(new Date(usage.queried_at)):usageErrorMessage?'查询未完成':refreshing?'正在读取共享账号…':'尚未查询套餐余量';
+    $('usage-sync').textContent=usageLoading?(usage?refreshingResults:'正在查询官方套餐余量…'):usage?.queried_at?'北京时间 · 最近查询 '+formatter.format(new Date(usage.queried_at)):usageErrorMessage?'查询未完成':refreshing?'正在读取共享账号…':'尚未查询套餐余量';
   }
   function renderCancellation(){
     const ready=Boolean(cancellation?.cancel_id)&&!cancellation.finished;
@@ -299,7 +379,7 @@
       applyAccount(result.account,cancellation.login_id);
       if(result.status==='success'){
         cancelCloseTimer=setTimeout(closeCancellation,3000);
-        if(loginId===cancellation.login_id)void loadServices();
+        if(loginId===cancellation.login_id)void loadServices(true);
       }
     }catch(error){
       cancellationMessage(error.message,'error');
@@ -315,55 +395,84 @@
     $('services-feedback').hidden=!servicesErrorMessage&&!needsLogin;
     $('services-relogin').hidden=!needsLogin;
     const query=$('services-search').value.trim().toLocaleLowerCase(),cancelOnly=Boolean($('services-cancel-only').checked);
-    $('services-search').disabled=!services||servicesLoading;
-    $('services-cancel-only').disabled=!services||servicesLoading;
+    $('services-search').disabled=!services;
+    $('services-cancel-only').disabled=!services;
+    const sort=$('services-sort');
+    sort.disabled=!services;
     function containsQuery(item){
       return item.name.toLocaleLowerCase().includes(query)||(item.fields||[]).some(field=>field.name.includes('说明')&&String(field.value??'').toLocaleLowerCase().includes(query))||(item.children||[]).some(containsQuery);
     }
     const matches=item=>(!cancelOnly||item.cancel?.available)&&(!query||containsQuery(item));
-    function serviceTable(items,path,label,sourceItems=items){
+    function orderKey(item){
+      const value=item.fields?.find(field=>field.name==='订购时间')?.value;
+      const digits=String(value??'').trim().replace(/[-/: T]/g,'');
+      return /^\d{8}(?:\d{4}(?:\d{2})?)?$/.test(digits)?digits.padEnd(14,'0'):'';
+    }
+    function displayTime(value){
+      return String(value).trim()
+        .replace(/^(\d{4})(\d{2})(\d{2})(?:(\d{2})(\d{2})(?:\d{2})?)?$/,
+          (_,year,month,day,hour,minute)=>`${year}-${month}-${day}${hour?` ${hour}:${minute}`:''}`)
+        .replace(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2})?$/,'$1 $2');
+    }
+    function serviceCards(items,path,label,sourceItems=items){
       const positions=new Map(sourceItems.map((item,index)=>[item,index]));
-      const table=node('table','services-table'),head=node('thead'),header=node('tr'),body=node('tbody');
-      table.setAttribute('aria-label',label);
-      for(const title of ['业务 / 有效期','操作']){const cell=node('th','',title);cell.setAttribute('scope','col');header.append(cell);}
-      head.append(header);
-      [...items].sort((a,b)=>Number(b.status==='已退订')-Number(a.status==='已退订')).forEach(item=>{
+      const list=node('div','services-card-list');list.setAttribute('role','group');list.setAttribute('aria-label',label);
+      const direction=sort.value==='newest'?-1:sort.value==='oldest'?1:0;
+      const ordered=[...items].sort((a,b)=>{
+        const byStatus=Number(b.status==='已退订')-Number(a.status==='已退订');
+        if(byStatus||!direction)return byStatus;
+        const first=orderKey(a),second=orderKey(b);
+        if(!first||!second)return Number(Boolean(second))-Number(Boolean(first));
+        return direction*first.localeCompare(second);
+      });
+      for(const item of ordered){
         const key=path+positions.get(item),fields=[{name:'资费',value:item.fee},{name:'状态',value:item.status},...(item.fields||[])];
         if(item.cancel?.reason)fields.push({name:'退订说明',value:item.cancel.reason});
         const cancelled=item.status==='已退订';
-        const row=node('tr','services-row'+(cancelled?' services-cancelled':'')),name=node('td','services-name'),actions=node('td','services-actions');
+        const card=node('article','services-card'+(cancelled?' services-cancelled':''));
+        const row=node('div','services-row'+(cancelled?' services-cancelled':''));
         const heading=node('button','services-name-label');
-        const chevron=node('span','services-chevron');chevron.setAttribute('aria-hidden','true');
-        heading.type='button';heading.setAttribute('aria-label',`${item.name}详情`);heading.append(chevron);
-        heading.append(node('span','',item.name));name.append(heading);
+        const info=node('span','services-info-mark','?');info.setAttribute('aria-hidden','true');
+        heading.type='button';heading.setAttribute('aria-label',`${item.name}详情`);
+        heading.append(node('span','',item.name),info);row.append(heading);
         if(cancelled)heading.append(node('small','services-cancelled-label','已退订'));
-        const period=fields.find(field=>['有效期','有效期限'].includes(field.name)&&amountText(field.value)!=='—');
-        const dates=period?[period]:fields.filter(field=>['生效时间','失效时间'].includes(field.name)&&amountText(field.value)!=='—');
-        if(dates.length){
-          const validity=node('small','services-validity',dates.map(field=>`${period?'':field.name==='生效时间'?'生效 ':'失效 '}${String(field.value).replace(/^(\d{4})(\d{2})(\d{2})\d{6}$/,'$1-$2-$3').replace(/^(\d{4}-\d{2}-\d{2})(?:\s+|T)\d{2}:\d{2}(?::\d{2})?/,'$1')}`).join(' · '));
-          validity.setAttribute('title',dates.map(field=>`${field.name}：${field.value}`).join('\n'));name.append(validity);
-        }
+        const dates=new Map((item.fields||[]).filter(field=>amountText(field.value)!=='—').map(field=>[field.name,field.value]));
+        const order=dates.get('订购时间'),start=dates.get('生效时间'),end=dates.get('失效时间');
+        const period=dates.get('有效期限')||dates.get('有效期');
+        const facts=node('dl','services-card-facts');
+        const addFact=(label,value)=>{
+          const fact=node('div');fact.append(node('dt','',label),node('dd','',value));facts.append(fact);
+        };
+        if(order)addFact('订购时间',displayTime(order));
+        if(period)addFact('有效期限',period);
+        else if(start&&end){
+          const endTime=displayTime(end);
+          const rangeEnd=/^至/.test(endTime)?endTime:endTime==='长期有效'?`· ${endTime}`:`至 ${endTime}`;
+          addFact('有效期限',`${displayTime(start)} 起 ${rangeEnd}`);
+        }else if(start)addFact('生效时间',displayTime(start));
+        else if(end)addFact('失效时间',displayTime(end));
+        if(facts.children.length)row.append(facts);
         if(item.cancel?.available){
+          const actions=node('div','services-actions');
           const cancel=node('button','services-cancel-action','退订');cancel.type='button';cancel.setAttribute('aria-label',`退订${item.name}`);
-          cancel.addEventListener('click',()=>openCancellation(item));actions.append(cancel);
-        }else{const unavailable=node('span','services-unavailable','—');unavailable.setAttribute('title',item.cancel?.reason||'该条目未提供在线退订入口');actions.append(unavailable);}
-        row.append(name,actions);body.append(row);
-        {
-          const detailRow=node('tr','services-detail-row'+(cancelled?' services-cancelled':'')),cell=node('td','services-details-cell');cell.setAttribute('colspan','2');
-          const detailId='services-detail-'+key.replaceAll('.','-');detailRow.setAttribute('id',detailId);heading.setAttribute('aria-controls',detailId);
-          detailRow.append(cell);body.append(detailRow);
-          const showDetails=()=>{
-            const open=serviceDetails.has(key);detailRow.hidden=!open;heading.setAttribute('aria-expanded',String(open));chevron.textContent=open?'−':'+';
-            if(!open||cell.children.length)return;
-            const details=node('dl','services-fields');
-            for(const field of fields){const entry=node('div');entry.append(node('dt','',field.name),node('dd','',amountText(field.value)));details.append(entry);}
-            cell.append(details);
-            if(item.children?.length){const children=node('div','services-related');children.append(node('h4','','关联业务'),serviceTable(item.children,key+'.',`${item.name}关联业务`));cell.append(children);}
-          };
-          heading.addEventListener('click',()=>{if(serviceDetails.has(key))serviceDetails.delete(key);else serviceDetails.add(key);showDetails();});showDetails();
+          cancel.addEventListener('click',()=>openCancellation(item));actions.append(cancel);row.append(actions);
         }
-      });
-      table.append(head,body);return table;
+        const detailRow=node('div','services-detail-row');
+        const detailId='services-detail-'+key.replaceAll('.','-');detailRow.setAttribute('id',detailId);heading.setAttribute('aria-controls',detailId);
+        card.append(row,detailRow);list.append(card);
+        const showDetails=()=>{
+          const open=serviceDetails.has(key);detailRow.hidden=!open;heading.setAttribute('aria-expanded',String(open));
+          if(!open||detailRow.children.length)return;
+          const details=node('dl','services-fields');
+          for(const field of fields){const entry=node('div');entry.append(node('dt','',field.name),node('dd','',amountText(field.value)));details.append(entry);}
+          detailRow.append(details);
+          if(item.children?.length){
+            const children=node('div','services-related');children.append(node('h4','','关联业务'),serviceCards(item.children,key+'.',`${item.name}关联业务`));detailRow.append(children);
+          }
+        };
+        heading.addEventListener('click',()=>{if(serviceDetails.has(key))serviceDetails.delete(key);else serviceDetails.add(key);showDetails();});showDetails();
+      }
+      return list;
     }
     const categoryNames=['我的套餐','增值业务','基础功能','活动'];
     const categories=categoryNames.map(name=>({name,sections:[]}));
@@ -383,7 +492,7 @@
     const activeIndex=categories.findIndex(category=>category.name===activeName);
     const tabs=categories.map((category,index)=>{
       const selected=category.name===activeName,button=node('button','services-tab'+(selected?' selected':''));button.type='button';
-      button.disabled=!services||servicesLoading;button.tabIndex=selected?0:-1;
+      button.disabled=!services;button.tabIndex=selected?0:-1;
       button.setAttribute('id',`services-tab-${index}`);button.setAttribute('role','tab');button.setAttribute('aria-selected',String(selected));button.setAttribute('aria-controls','services-groups');
       const count=counts[index];
       const badge=node('small','services-tab-count',services?String(count):'—');
@@ -406,24 +515,35 @@
       if(!items.length)return [];
       const content=node('section','services-section');
       if(section.name!==activeName)content.append(node('h3','services-section-heading',section.name));
-      content.append(serviceTable(items,`${activeIndex}.${index}.`,section.name,section.items));return [content];
+      content.append(serviceCards(items,`${activeIndex}.${index}.`,section.name,section.items));return [content];
     });
     if(!groups.length){
       const message=servicesLoading?'正在查询该账号已订业务…':!selected?(refreshing?'正在读取共享账号…':'共享账号池为空，请从左侧“账号管理”登录。'):servicesErrorMessage?'本次已订业务查询未完成，点击“刷新信息”重试。':services?(query||cancelOnly?'当前分类没有匹配的业务，请调整关键词或筛选条件。':services.message||`${activeName}暂无已订业务记录。`):'选择账号后查询已订业务。';
-      groups.push(node('p','services-empty',message));
+      groups.push(servicesLoading?loadingPlaceholder(message,3):node('p','services-empty',message));
     }
     $('services-groups').replaceChildren(...groups);
     const notes=services?.notes||[];$('services-notes-list').replaceChildren(...notes.map(note=>node('li','',note)));$('services-notes').hidden=!notes.length;
-    $('services-sync').textContent=servicesLoading?'正在查询官方已订业务…':services?.queried_at?'北京时间 · 最近查询 '+formatter.format(new Date(services.queried_at)):servicesErrorMessage?'查询未完成':refreshing?'正在读取共享账号…':'尚未查询已订业务';
+    $('services-sync').textContent=servicesLoading?(services?refreshingResults:'正在查询官方已订业务…'):services?.queried_at?'北京时间 · 最近查询 '+formatter.format(new Date(services.queried_at)):servicesErrorMessage?'查询未完成':refreshing?'正在读取共享账号…':'尚未查询已订业务';
   }
-  function render(){
-    const selected=accounts.find(account=>account.id===loginId),index=months.indexOf(month);
-    const needsLogin=selected&&(loginRequiredCodes.has(errorCode)||(!bill&&selected.status==='login_required'));
-    $('bills-refresh').disabled=loading||usageLoading||servicesLoading||refreshing;
-    $('bills-refresh').textContent=loading||usageLoading||servicesLoading?'查询中…':'刷新信息';
-    $('bills-content').setAttribute('aria-busy',String(loading));
+  function renderRefreshState(){
+    const busy=loading||usageLoading||servicesLoading||refreshing;
+    $('bills-refresh').disabled=busy;
+    $('bills-refresh').setAttribute('aria-busy',String(busy));
+    $('bills-refresh').textContent=busy?'查询中…':'刷新信息';
     $('information-feedback-message').textContent=informationErrorMessage;
     $('information-feedback').hidden=!informationErrorMessage;
+  }
+  function showQueryStart(panel,keepData,renderPanel){
+    if(keepData){
+      $(panel+'-content').setAttribute('aria-busy','true');
+      $(panel+'-sync').textContent=refreshingResults;
+    }else renderPanel();
+    renderRefreshState();
+  }
+  function renderBill(){
+    const selected=accounts.find(account=>account.id===loginId),index=months.indexOf(month);
+    const needsLogin=selected&&(loginRequiredCodes.has(errorCode)||(!bill&&selected.status==='login_required'));
+    $('bills-content').setAttribute('aria-busy',String(loading));
     $('bills-month').disabled=!months.length;
     $('bills-previous').disabled=index<0||index===months.length-1;
     $('bills-next').disabled=index<=0;
@@ -438,15 +558,27 @@
     }));
     $('bills-period').textContent=bill?.period||(month?monthText(month):'选择账号和月份后查看');
     for(const field of moneyFields)$('bills-'+field).textContent=amountText(bill?.[field]);
+    $('bills-breakdown-payable').textContent=amountText(bill?.payable);
+    const [payable,original,discount,rebate]=['payable','original','discount','rebate']
+      .map(field=>Math.round(Number(amountText(bill?.[field]))*100));
+    const balanced=[payable,original,discount,rebate].every(Number.isSafeInteger)&&payable===original-discount-rebate;
+    $('bills-breakdown').setAttribute('data-balanced',String(balanced));
+    const payments=bill?.sections?.find(section=>section.name==='代付与返费明细')?.items||[];
+    const activityRebate=payments.length===1&&payments[0].name==='活动返费'&&
+      Math.round(Math.abs(Number(amountText(payments[0].amount)))*100)===rebate;
+    $('bills-rebate-label').textContent=activityRebate?'活动返费':'返费抵扣';
     const summary=(bill?.summary||[]).filter(item=>amountText(item.amount)!=='—');
-    $('bills-extra-summary').replaceChildren(...summary.map(item=>{
+    const saving=summary.find(item=>item.name==='本月为您节省');
+    const extraSummary=summary.filter(item=>item!==saving);
+    $('bills-extra-summary').replaceChildren(...extraSummary.map(item=>{
       const entry=node('div'),amount=node('dd',Number(item.amount)<0?'bills-deduction':'',amountText(item.amount));amount.append(node('span','',' 元'));
       entry.append(node('dt','',item.name),amount);return entry;
     }));
-    $('bills-extra-summary').hidden=!summary.length;
+    $('bills-extra-summary').hidden=!extraSummary.length;
     const notes=bill?.notes||[];
     $('bills-notes-list').replaceChildren(...notes.map(note=>node('li','',note)));
     $('bills-notes').hidden=!notes.length;
+    $('bills-reading-guide').hidden=!notes.length;
     $('bills-feedback-message').textContent=errorMessage||(needsLogin?'该账号需要恢复登录，可在账号管理中继续。':'');
     $('bills-feedback').hidden=!errorMessage&&!needsLogin;
     $('bills-relogin').hidden=!needsLogin;
@@ -454,29 +586,77 @@
       items.forEach((item,itemIndex)=>{
         const key=path+itemIndex,hasChildren=hasBillDetails(item),open=hasChildren&&expanded.has(key);
         const row=node('tr',depth===0?'bills-row-total':'bills-row-detail'),name=node('td'),label=node('div','bills-item-name');
-        name.style.paddingLeft=`${19+Math.min(depth,8)*23}px`;
-        if(hasChildren){
-          const toggle=node('button','bills-item-toggle',open?'−':'+');toggle.type='button';
-          toggle.setAttribute('aria-expanded',String(open));toggle.setAttribute('aria-label',`${open?'收起':'展开'}${item.name}明细`);
-          toggle.addEventListener('click',()=>{if(expanded.has(key))expanded.delete(key);else expanded.add(key);render();});label.append(toggle);
-        }else label.append(node('span','bills-item-leaf'));
+        name.style.paddingInlineStart=`${8+Math.min(depth,4)*8}px`;
         label.append(node('span','bills-item-text',item.name));name.append(label);
-        row.append(name,node('td','bills-number'+(Number(item.original)<0?' bills-deduction':''),amountText(item.original)),node('td','bills-number'+(Math.abs(Number(item.discount))>0?' bills-deduction':''),amountText(item.discount)),node('td','bills-number'+(Number(item.amount)<0?' bills-deduction':''),amountText(item.amount)));rows.push(row);
+        const actual=node('td','bills-number'+(Number(item.amount)<0?' bills-deduction':''));
+        const value=amountText(item.amount);
+        if(hasChildren){
+          const toggle=node('button','bills-item-toggle',value);toggle.type='button';
+          toggle.setAttribute('aria-expanded',String(open));
+          toggle.setAttribute('aria-label',`${open?'收起':'展开'}${item.name}明细，实际消费 ${value}`);
+          toggle.id=`bill-row-${key}`;
+          toggle.addEventListener('click',()=>{if(expanded.has(key))expanded.delete(key);else expanded.add(key);renderBill();$(toggle.id).focus();});
+          actual.append(toggle);
+        }else actual.textContent=value;
+        row.append(name,node('td','bills-number'+(Number(item.original)<0?' bills-deduction':''),amountText(item.original)),node('td','bills-number'+(Math.abs(Number(item.discount))>0?' bills-deduction':''),amountText(item.discount)),actual);
+        rows.push(row);
         if(hasChildren&&open)appendRows(item.children,rows,depth+1,key+'.');
       });
     }
+    function billTable(items,label,path='',withTotals=false){
+      const wrap=node('div','bills-table-wrap'),table=node('table','bills-table'),head=node('thead'),header=node('tr'),body=node('tbody'),rows=[];
+      table.setAttribute('aria-label',label);
+      for(const title of ['消费项目','原价','减免','实际消费']){
+        const cell=node('th','',title);cell.setAttribute('scope','col');header.append(cell);
+      }
+      appendRows(items,rows,withTotals?0:1,path);
+      head.append(header);body.append(...rows);table.append(head,body);
+      if(withTotals){
+        const foot=node('tfoot');
+        if(bill.total!=null){
+          const total=node('tr','bills-total-row'),discount=amountText(bill.discount);
+          const title=node('th','','合计');title.setAttribute('scope','row');
+          total.append(title,node('td','bills-number',amountText(bill.original)),
+            node('td',Number(discount)>0?'bills-number bills-deduction':'bills-number',Number(discount)>0?'-'+discount:discount),
+            node('td','bills-number',amountText(bill.total)));
+          foot.append(total);
+        }
+        for(const item of payments.filter(item=>item.name==='活动返费')){
+          const row=node('tr','bills-rebate-row'),label=node('th');
+          label.setAttribute('scope','row');label.colSpan=3;
+          const trigger=node('button','bills-rebate-trigger','活动返费 ›');trigger.type='button';
+          trigger.setAttribute('aria-haspopup','dialog');
+          trigger.addEventListener('click',()=>showBillRebate(item));
+          label.append(trigger);row.append(label,node('td','bills-number',amountText(item.amount)));
+          foot.append(row);
+        }
+        if(bill.payable!=null){
+          const row=node('tr','bills-payable-row'),label=node('th','','实际应付');
+          label.setAttribute('scope','row');label.colSpan=3;
+          row.append(label,node('td','bills-number',amountText(bill.payable)));foot.append(row);
+        }
+        if(foot.children.length)table.append(foot);
+      }
+      wrap.append(table);return wrap;
+    }
     const cards=[];
-    function appendCards(items,path=''){
-      items.forEach((item,itemIndex)=>{
-        const key=path+itemIndex,hasChildren=hasBillDetails(item),open=hasChildren&&expanded.has(key);
+    function appendSection(section,path){
+      section.items.forEach((item,itemIndex)=>{
+        const key=path+itemIndex,opensRebate=isActivityRebate(section,item);
+        if(opensRebate&&bill.items.length)return;
+        const hasChildren=!opensRebate&&hasBillDetails(item),open=hasChildren&&expanded.has(key);
         const card=node('article','bills-detail-card'+(open?' expanded':''));
-        const heading=node(hasChildren?'button':'div','bills-card-heading');
+        const heading=node(hasChildren||opensRebate?'button':'div','bills-card-heading');
         const label=node('span','bills-card-label',item.name),amount=node('span','bills-card-value');
         amount.append(node('strong',Number(item.amount)<0?'bills-deduction':'',amountText(item.amount)),node('small','','元'));
-        if(hasChildren){
+        if(opensRebate){
+          heading.type='button';heading.setAttribute('aria-haspopup','dialog');
+          label.append(node('span','bills-card-chevron','›'));
+          heading.addEventListener('click',()=>showBillRebate(item));
+        }else if(hasChildren){
           heading.type='button';heading.setAttribute('aria-expanded',String(open));heading.setAttribute('aria-label',`${open?'收起':'展开'}${item.name}明细`);
           label.append(node('span','bills-card-chevron',open?'−':'+'));
-          heading.addEventListener('click',()=>{if(expanded.has(key))expanded.delete(key);else expanded.add(key);render();});
+          heading.addEventListener('click',()=>{if(expanded.has(key))expanded.delete(key);else expanded.add(key);renderBill();});
         }
         heading.append(label,amount);
         const summary=node('div','bills-card-summary');
@@ -486,99 +666,152 @@
         }
         card.append(heading);
         if(summary.children.length)card.append(summary);else card.className+=' no-summary';
-        if(hasChildren&&open){
-          const wrap=node('div','bills-table-wrap'),table=node('table','bills-table'),thead=node('thead'),header=node('tr'),tbody=node('tbody'),rows=[];
-          table.setAttribute('aria-label',`${item.name}费用明细`);
-          ['费用项目','优惠前 / 元','优惠减免 / 元','金额 / 元'].forEach(text=>{const cell=node('th','',text);cell.setAttribute('scope','col');header.append(cell);});
-          thead.append(header);appendRows(item.children,rows,0,key+'.');tbody.append(...rows);table.append(thead,tbody);wrap.append(table);card.append(wrap);
-        }
+        if(open)card.append(billTable(item.children,`${item.name}费用明细（元）`,key+'.'));
         cards.push(card);
       });
     }
-    if(bill)appendCards(bill.items);
+    if(bill?.items.length)cards.push(billTable(bill.items,'月度账单明细（元）','',true));
     (bill?.sections||[]).forEach((section,sectionIndex)=>{
-      if(!section.items.length)return;
-      if(section.items.length!==1||section.items[0].compact_details!==true)cards.push(node('h3','bills-section-heading',section.name));
-      appendCards(section.items,`section-${sectionIndex}.`);
+      if(saving&&section.name==='节省明细')return;
+      const visible=section.items.filter(item=>!(bill.items.length&&isActivityRebate(section,item)));
+      if(!visible.length)return;
+      if(visible.length!==1||visible[0].compact_details!==true)cards.push(node('h3','bills-section-heading',section.name));
+      appendSection(section,`section-${sectionIndex}.`);
     });
+    if(saving){
+      const details=bill.sections?.find(section=>section.name==='节省明细')?.items||[];
+      const panel=node(details.length?'details':'section','bills-savings');
+      panel.id='bills-savings';
+      if(details.length)panel.open=$('bills-savings')?.open===true;
+      const heading=node(details.length?'summary':'div','bills-savings-heading');
+      heading.append(node('span','','本月节省'),node('strong','',`${saving.amount} 元`));
+      panel.append(heading);
+      if(details.length){
+        const rows=node('dl');
+        for(const item of details){
+          const row=node('div'),amount=amountText(item.amount);
+          row.append(node('dt','',item.name),node('dd','',amount==='—'?amount:`${amount} 元`));rows.append(row);
+        }
+        panel.append(rows);
+      }
+      cards.push(panel);
+    }
     if(!cards.length){
       const message=loading?'正在查询该账号账单…':!selected?(refreshing?'正在读取共享账号…':'共享账号池为空，请从左侧“账号管理”登录。'):errorMessage?'本次查询未完成，点击“刷新信息”重试。':!month?'当前没有可查询的账单月份。':bill?bill.message||'该月暂无账单明细。':'选择账号和月份后查询账单。';
-      cards.push(node('p','bills-empty',message));
+      cards.push(loading?loadingPlaceholder(message,3):node('p','bills-empty',message));
     }
     $('bills-items').replaceChildren(...cards);
-    $('bills-expand').disabled=!(bill?.items.some(hasBillDetails)||(bill?.sections||[]).some(section=>section.items.some(hasBillDetails)));
+    $('bills-expand').disabled=!(bill?.items.some(hasBillDetails)||(bill?.sections||[]).some(section=>section.items.some(item=>!isActivityRebate(section,item)&&hasBillDetails(item))));
     $('bills-collapse').disabled=$('bills-expand').disabled;
-    $('bills-sync').textContent=loading?'正在查询官方账单…':bill?.queried_at?'北京时间 · 最近查询 '+formatter.format(new Date(bill.queried_at)):errorMessage?'查询未完成':refreshing?'正在读取共享账号…':'尚未查询账单';
-    renderUsage();
-    renderServices();
+    $('bills-sync').textContent=loading?(bill?refreshingResults:'正在查询官方账单…'):bill?.queried_at?'北京时间 · 最近查询 '+formatter.format(new Date(bill.queried_at)):errorMessage?'查询未完成':refreshing?'正在读取共享账号…':'尚未查询账单';
   }
-  async function loadBill(){
+  async function loadBill(sameAccount=false){
     const version=++requestVersion,accountId=loginId,queryMonth=month;
-    bill=null;expanded.clear();errorMessage='';errorCode='';
-    if(!accountId||!queryMonth){loading=false;render();return;}
-    loading=true;render();
+    if($('bills-rebate-dialog').open)$('bills-rebate-dialog').close();
+    const keepData=Boolean(sameAccount&&bill&&bill.month===queryMonth);
+    if(!keepData){bill=null;expanded.clear();}
+    errorMessage='';errorCode='';
+    loading=Boolean(accountId&&queryMonth);
+    showQueryStart('bills',keepData,renderBill);
+    if(!loading)return;
     try{
       const result=await api('/api/bills/query?'+new URLSearchParams({login_id:accountId,month:queryMonth}));
       if(version!==requestVersion)return;
       applyAccount(result.account,accountId);bill=result;
+      if(!keepData)expandItems(bill.items);
     }catch(error){
       if(version!==requestVersion)return;
-      applyAccount(error.account,accountId);errorMessage=error.message;errorCode=error.code||'';
-    }finally{if(version===requestVersion){loading=false;render();}}
+      applyAccount(error.account,accountId);bill=null;errorMessage=error.message;errorCode=error.code||'';
+    }finally{if(version===requestVersion){loading=false;renderBill();renderRefreshState();}}
   }
-  async function loadUsage(){
+  async function loadUsage(sameAccount=false){
     const version=++usageRequestVersion,accountId=loginId;
-    usage=null;usageExpanded.clear();usageErrorMessage='';usageErrorCode='';
-    if(!accountId){usageLoading=false;render();return;}
-    usageLoading=true;render();
+    const keepData=Boolean(sameAccount&&usage);
+    if(!keepData){usage=null;usageExpanded.clear();}
+    usageErrorMessage='';usageErrorCode='';
+    usageLoading=Boolean(accountId);
+    showQueryStart('usage',keepData,renderUsage);
+    if(!usageLoading)return;
     try{
       const result=await api('/api/usage/query?'+new URLSearchParams({login_id:accountId}));
       if(version!==usageRequestVersion)return;
       applyAccount(result.account,accountId);usage=result;
     }catch(error){
       if(version!==usageRequestVersion)return;
-      applyAccount(error.account,accountId);usageErrorMessage=error.message;usageErrorCode=error.code||'';
-    }finally{if(version===usageRequestVersion){usageLoading=false;render();}}
+      applyAccount(error.account,accountId);usage=null;usageErrorMessage=error.message;usageErrorCode=error.code||'';
+    }finally{if(version===usageRequestVersion){usageLoading=false;renderUsage();renderRefreshState();}}
   }
-  async function loadServices(){
+  async function loadServices(sameAccount=false){
     const version=++servicesRequestVersion,accountId=loginId;
-    services=null;servicesErrorMessage='';servicesErrorCode='';serviceDetails.clear();
-    if(!accountId){servicesLoading=false;render();return;}
-    servicesLoading=true;render();
+    const keepData=Boolean(sameAccount&&services);
+    if(!keepData){services=null;serviceDetails.clear();}
+    servicesErrorMessage='';servicesErrorCode='';
+    servicesLoading=Boolean(accountId);
+    $('services-groups').inert=servicesLoading;
+    showQueryStart('services',keepData,renderServices);
+    if(!servicesLoading)return;
     try{
       const result=await api('/api/services/query?'+new URLSearchParams({login_id:accountId}));
       if(version!==servicesRequestVersion)return;
       applyAccount(result.account,accountId);services=result;
     }catch(error){
       if(version!==servicesRequestVersion)return;
-      applyAccount(error.account,accountId);servicesErrorMessage=error.message;servicesErrorCode=error.code||'';
-    }finally{if(version===servicesRequestVersion){servicesLoading=false;render();}}
+      applyAccount(error.account,accountId);services=null;servicesErrorMessage=error.message;servicesErrorCode=error.code||'';
+    }finally{
+      if(version===servicesRequestVersion){
+        servicesLoading=false;$('services-groups').inert=false;renderServices();renderRefreshState();
+      }
+    }
   }
-  function loadInformation(){return Promise.all([loadBill(),loadUsage(),loadServices()]);}
+  function loadInformation(sameAccount){return Promise.all([loadBill(sameAccount),loadUsage(sameAccount),loadServices(sameAccount)]);}
   async function refresh(){
     if(refreshing){refreshPending=true;return;}
-    refreshing=true;informationErrorMessage='';render();
+    refreshing=true;informationErrorMessage='';renderRefreshState();
     try{
-      const result=await api('/api/bills/accounts');accounts=result.accounts;months=[...new Set(result.months)].sort().reverse();
+      const result=await api('/api/bills/accounts'),previousAccount=loginId;
+      accounts=result.accounts;months=[...new Set(result.months)].sort().reverse();
       if(!accounts.some(account=>account.id===loginId))loginId=accounts.find(account=>account.status==='active')?.id||accounts[0]?.id||'';
       if(!months.includes(month))month=months.includes(result.default_month)?result.default_month:months[0]||'';
-      renderAccounts();renderMonths();await loadInformation();
+      renderAccounts();renderMonths();await loadInformation(Boolean(loginId&&loginId===previousAccount));
     }catch(error){informationErrorMessage=error.message;$('bills-account-hint').textContent='账号或月份读取失败，请刷新重试。';}
-    finally{refreshing=false;render();if(refreshPending){refreshPending=false;await refresh();}}
+    finally{
+      refreshing=false;
+      if(refreshPending){refreshPending=false;await refresh();}
+      else{
+        if(!loginId){renderBill();renderUsage();renderServices();}
+        renderRefreshState();
+      }
+    }
   }
-  function changeMonth(value){month=value;$('bills-month').value=month;return loadBill();}
+  function changeMonth(value){month=value;$('bills-month').value=month;return loadBill(true);}
+  planControl.addEventListener('pointerenter',event=>{if(event.pointerType==='mouse')setPlanOpen(true);});
+  planControl.addEventListener('pointerleave',event=>{
+    if(event.pointerType==='mouse'&&!planPinned&&!planPopover.contains(document.activeElement))setPlanOpen(false);
+  });
+  planTrigger.addEventListener('click',()=>{planPinned=!planPinned;setPlanOpen(planPinned);});
+  const closePlanOutside=event=>{if(!planPopover.hidden&&!planControl.contains(event.target))setPlanOpen(false);};
+  window.addEventListener('pointerdown',closePlanOutside);
+  window.addEventListener('focusin',closePlanOutside);
+  window.addEventListener('keydown',event=>{
+    if(event.key!=='Escape'||planPopover.hidden)return;
+    const restoreFocus=planPopover.contains(document.activeElement);
+    setPlanOpen(false);
+    if(restoreFocus)planTrigger.focus();
+  });
   $('bills-refresh').addEventListener('click',refresh);
   $('bills-month').addEventListener('change',()=>changeMonth($('bills-month').value));
   $('bills-previous').addEventListener('click',()=>changeMonth(months[months.indexOf(month)+1]));
   $('bills-next').addEventListener('click',()=>changeMonth(months[months.indexOf(month)-1]));
-  $('bills-expand').addEventListener('click',()=>{expandItems(bill.items);(bill.sections||[]).forEach((section,index)=>expandItems(section.items,`section-${index}.`));render();});
-  $('bills-collapse').addEventListener('click',()=>{expanded.clear();render();});
+  $('bills-expand').addEventListener('click',()=>{expandItems(bill.items);(bill.sections||[]).forEach((section,index)=>expandItems(section.items,`section-${index}.`));renderBill();});
+  $('bills-collapse').addEventListener('click',()=>{expanded.clear();renderBill();});
+  $('bills-rebate-close').addEventListener('click',()=>$('bills-rebate-dialog').close());
   function openAccountManager(){window.dispatchEvent(new CustomEvent('open-account-manager',{detail:{loginId,reloginId:loginId}}));}
   $('bills-relogin').addEventListener('click',openAccountManager);
   $('usage-relogin').addEventListener('click',openAccountManager);
   $('services-relogin').addEventListener('click',openAccountManager);
   $('services-search').addEventListener('input',()=>renderServices(true));
   $('services-cancel-only').addEventListener('change',()=>renderServices(true));
+  $('services-sort').addEventListener('change',()=>renderServices());
   $('services-cancel-close').addEventListener('click',closeCancellation);
   $('services-cancel-dismiss').addEventListener('click',closeCancellation);
   $('services-cancel-dialog').addEventListener('cancel',event=>{event.preventDefault();closeCancellation();});

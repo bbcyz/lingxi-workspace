@@ -18,8 +18,8 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from credential_cache import CredentialCache
-from http_transport import requests
+from workspace.accounts.credentials import CredentialCache
+from workspace.http_transport import requests
 from recharge.cmcc import parse_server_time
 
 

@@ -135,10 +135,7 @@
   body.workspace-app .services-search-options{font-size:11px}
   body.workspace-app .services-search-options>label{min-height:36px;font-size:12px}
   body.workspace-app button.services-tab{font-size:12px;min-height:40px}
-  body.workspace-app .services-table .services-name-label{font-size:13px}
-  body.workspace-app .services-table th:last-child{width:76px}
   body.workspace-app button.services-cancel-action{min-width:48px;font-size:12px}
-  body.workspace-app .services-validity{font-size:10px}
   body.workspace-app .services-fields dd{font-size:12px}
 
   /* Forms, account management, payment and task dialogs fit the viewport. */
@@ -208,7 +205,6 @@
  body.workspace-app .information-columns .bills-card-summary{padding:0 0 10px 24px}
  body.workspace-app .information-columns .bills-details-heading{padding:12px;flex-direction:row;gap:8px}
  body.workspace-app .information-columns button.services-tab{min-height:40px;font-size:12px}
- body.workspace-app .information-columns button.services-name-label{font-size:12px}
  body.workspace-app .information-columns .bills-notes>summary{min-height:40px;display:flex;align-items:center}
 }
 

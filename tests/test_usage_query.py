@@ -8,9 +8,9 @@ from unittest.mock import Mock, patch
 
 from flask import Flask
 
-from app_login import AppLoginError
+from workspace.accounts.login import AppLoginError
 from recharge.cmcc import SHANGHAI
-from usage_query import (COUNTRY_PATH, PLAN_PATH, REMAIN_PATH, SHARE_PATH, UsageError,
+from features.information.usage import (COUNTRY_PATH, PLAN_PATH, REMAIN_PATH, SHARE_PATH, UsageError,
                          UsageQueries, normalize_usage, register_usage, _present_usage)
 
 NOW = datetime(2026, 11, 6, 9, 45, tzinfo=SHANGHAI)
@@ -45,8 +45,9 @@ REMAIN = {'newPlanRemainQryRes': {
         'unit': '05', 'totalRes': '3', 'usedRes': '0', 'remainRes': '--', 'continueFlag': '1'}]},
 }}
 PLANS = {'planQryInfos': [{'type': '1', 'curPlanId': 'now', 'curPlanName': '家庭套餐',
-    'busiInfoList': [{'type': '1', 'busiInfo': [{'unit': '05', 'busiNum': '20.0000'}]},
-                     {'type': '0', 'busiInfo': [{'unit': '01', 'busiNum': 'N'}]}],
+    'busiInfoList': [{'type': '1', 'busiInfo': [{'unit': '05', 'busiNum': '20.0000', 'usedRes': '1', 'remainRes': '19'}]},
+                     {'type': '0', 'busiInfo': [{'unit': '01', 'busiNum': 'N'}]},
+                     {'type': '3', 'busiInfo': [{'unit': '08', 'busiNum': '1000', 'busiName': ''}]}],
     'reservePlanInfo': {'reservePlanId': 'next', 'reservePlanName': '下月套餐', 'busiInfomsg': '下月生效'}}]}
 COUNTRY = {'flowPacketUsageInfoList': [{'productName': '境外包', 'allFlows': '2048.1234', 'usedFlows': '1.0001',
     'leftFlows': '2047.1233', 'allVoice': '20', 'usedVoice': '0', 'leftVoice': '20',
@@ -105,6 +106,26 @@ class UsageQueryTests(unittest.TestCase):
         self.assertEqual(summary['used_percent'], '28.43')
         self.assertEqual(summary['remaining_percent'], '71.56')
 
+    def test_speed_threshold_is_not_displayed_as_a_finite_flow_allowance(self):
+        body = deepcopy(REMAIN)
+        flow = body['newPlanRemainQryRes']['planRemianFlowListRes']
+        flow.update(limitType='02', outPlanInfoRes=[])
+        common, directed = flow['planRemianFlowRes']
+        common.update(flowSumNum='10', flowUsdNum='2', flowRemainNum='8')
+        plan = common['planRemianFlowInfoRes'][0]
+        plan.update(plantype='02', limitRes='10')
+        plan['flowInfoRes'][0].update(totalRes='10240', usedRes='2048', remainRes='8192')
+        directed.update(flowSumNum='10', flowUsdNum='0', flowRemainNum='10')
+        result = normalize_usage(body, PLANS, COUNTRY, NOW)
+        common_summary, directed_summary = result['overview'][:2]
+        limited_detail = result['groups'][0]['items'][0]['children'][0]
+        for item in (common_summary, limited_detail):
+            self.assertTrue(item['used_only'])
+            self.assertEqual(item['display'], {'used':{'value':'2','unit':'GB'}})
+            self.assertIsNone(item['remaining_percent'])
+        self.assertFalse(directed_summary['used_only'])
+        self.assertEqual(directed_summary['display']['total'], {'value':'10','unit':'GB'})
+
     def test_display_preserves_tiny_allowances_and_does_not_invent_wrapper_totals(self):
         child={'unit':'GB','total':'0.0001','used':'0','remaining':'0.0001'}
         wrapper={'unit':'','total':None,'used':None,'remaining':None,'children':[child]}
@@ -144,7 +165,7 @@ class UsageQueryTests(unittest.TestCase):
             transports.append(flow.transport)
             return original(path, payload)
         flow.call.side_effect = call
-        with patch('usage_query.requests.Session') as create:
+        with patch('features.information.usage.requests.Session') as create:
             first, second = Mock(), Mock()
             create.return_value.__enter__.side_effect = [first, second]
             service.query('a'); service.query('b')
@@ -209,8 +230,10 @@ class UsageQueryTests(unittest.TestCase):
         result = normalize_usage(REMAIN, PLANS, COUNTRY, NOW)
         package = next(group for group in result['groups'] if group['name'] == '套餐信息')['items'][0]
         self.assertEqual(package['name'], '家庭套餐')
+        self.assertEqual([item['name'] for item in package['children']], ['流量', '通话', '下月套餐'])
         self.assertEqual(package['children'][0]['unit'], 'GB')
         self.assertEqual(package['children'][0]['total'], '20.0000')
+        self.assertIsNone(package['children'][0]['used'])
         self.assertIsNone(package['children'][0]['remaining'])
         self.assertTrue(package['children'][1]['unlimited'])
         self.assertEqual(package['children'][2]['name'], '下月套餐')
@@ -224,6 +247,20 @@ class UsageQueryTests(unittest.TestCase):
         self.assertIsNone(international[1]['total'])
         other = next(group for group in result['groups'] if group['name'] == '其他资源')['items'][0]
         self.assertIsNone(other['remaining']); self.assertEqual(other['used'], '0')
+
+    def test_plan_flow_allowances_preserve_official_resource_names(self):
+        plan_name = '黔心选嘉享卡19.9元'
+        plans = {'planQryInfos': [{'curPlanName': plan_name, 'busiInfoList': [{'type': '1', 'busiInfo': [
+            {'unit': '03', 'busiNum': '1024', 'busiName': plan_name + '通用流量'},
+            {'unit': '03', 'busiNum': '1024', 'busiName': plan_name + '区域流量(区域流量)'},
+        ]}]}]}
+        groups = normalize_usage(REMAIN, plans, COUNTRY, NOW)['groups']
+        allowances = next(group for group in groups if group['name'] == '套餐信息')['items'][0]['children']
+        self.assertEqual([(row['name'], row['display']['total']) for row in allowances], [
+            ('通用流量', {'value': '1', 'unit': 'GB'}),
+            ('区域流量', {'value': '1', 'unit': 'GB'}),
+        ])
+        self.assertTrue(all(row['used'] is None and row['remaining'] is None for row in allowances))
 
     def test_empty_invalid_and_special_day_lifetime_data_are_explicit(self):
         result = normalize_usage({'newPlanRemainQryRes': {}}, {}, {}, NOW)
@@ -347,6 +384,50 @@ class UsageQueryTests(unittest.TestCase):
         self.assertEqual(result['overview'][0]['remaining'], '8960.000')
         self.assertIn('套餐说明未更新', result['notes'][-1])
         self.assertEqual(flow.call.call_count, 2); recover.assert_not_called()
+
+    def test_unavailable_roaming_product_is_recorded_without_a_usage_failure_notice(self):
+        recover = Mock(); service, flow, _ = self.make_service(recover=recover)
+        original = flow.call.side_effect
+        def unavailable(path, payload):
+            if path == COUNTRY_PATH:
+                return 200, {'retCode': '213080', 'retDesc': '您订购的产品企业代码不存在或已下架，办理失败'}, {}
+            if path == SHARE_PATH:
+                return 200, {'retCode': '000000', 'rspBody': {'userShareInfoRes': [{
+                    'cardstate': '0', 'shareDetailInfo': [{'resourcesCode': '04', 'planName': '共享流量包',
+                        'unit': '05', 'shareTotalRes': '10', 'shareUsedRes': '1', 'shareRemainRes': '9'}],
+                }]}}, {}
+            return original(path, payload)
+        flow.call.side_effect = unavailable
+        result = service.query('a')
+        self.assertEqual(result['overview'][0]['remaining'], '8960.000')
+        self.assertTrue(any(group['name'] == '套餐信息' for group in result['groups']))
+        self.assertTrue(any(group['name'] == '共享主卡用量' for group in result['groups']))
+        self.assertFalse(any(group['name'] == '国际及港澳台用量' for group in result['groups']))
+        self.assertEqual(result['notes'], normalize_usage(REMAIN, PLANS, {}, NOW)['notes'])
+        self.assertEqual(len(result['unavailable_queries']), 1)
+        status = result['unavailable_queries'][0]
+        self.assertEqual((status['name'], status['code']), ('国际及港澳台用量', '213080'))
+        self.assertIn('不存在或已下架', status['message'])
+        self.assertEqual([call.args[0] for call in flow.call.call_args_list],
+                         [REMAIN_PATH, PLAN_PATH, COUNTRY_PATH, SHARE_PATH])
+        recover.assert_not_called()
+
+    def test_unavailable_product_handling_is_scoped_to_roaming_and_its_exact_code(self):
+        for path, code, raises in ((REMAIN_PATH, '213080', True), (PLAN_PATH, '213080', False),
+                                   (COUNTRY_PATH, '228000', False)):
+            with self.subTest(path=path, code=code):
+                service, flow, _ = self.make_service()
+                original = flow.call.side_effect
+                flow.call.side_effect = lambda actual, payload: (
+                    (200, {'retCode': code, 'retDesc': '业务查询失败'}, {}) if actual == path else original(actual, payload))
+                if raises:
+                    with self.assertRaises(UsageError) as error:
+                        service.query('a')
+                    self.assertEqual(error.exception.code, code)
+                else:
+                    result = service.query('a')
+                    self.assertEqual(result['unavailable_queries'], [])
+                    self.assertTrue(any(code in note for note in result['notes']))
 
     def test_cookie_rotation_returns_to_shared_storage_without_relogin(self):
         accept = Mock(); service, flow, _ = self.make_service(accept_credentials=accept)

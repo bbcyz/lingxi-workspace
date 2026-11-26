@@ -16,7 +16,7 @@ import string
 import threading
 import time
 
-from http_transport import requests
+from workspace.http_transport import requests
 
 
 APP_ID = '9e11b6f9f78e14953febc4e3ce2ea609'

@@ -3,6 +3,7 @@
   const preview = $('checkin-team-preview');
   const join = $('checkin-team-join');
   const award = $('checkin-team-award');
+  const body = $('checkin-team-body');
   const feedback = $('checkin-team-feedback');
   const groups = $('checkin-team-groups');
   const accountRows = $('checkin-team-account-rows');
@@ -25,6 +26,7 @@
     preview.disabled = join.disabled = true;
     join.hidden = true;
     planId = null;
+    body.hidden = false;
     feedback.textContent = '正在查询各共享账号的官方组团状态…';
     try {
       const result = await api('/api/checkin/teams/preview', {});
@@ -63,6 +65,8 @@
 
   award?.addEventListener('click', async () => {
     award.disabled = true;
+    body.hidden = false;
+    feedback.textContent = '正在检查本月的组团奖励…';
     try {
       const result = await api('/api/checkin/teams/awards', {});
       feedback.textContent = result.queued ? `已安排 ${result.queued} 个账号检查，符合资格时自动领取。`

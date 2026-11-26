@@ -5,42 +5,78 @@
   <title>签到有礼 · 本地工具台</title><link rel="icon" href="/favicon.ico">
   <link rel="stylesheet" href="/static/portal.css"><link rel="stylesheet" href="/static/workspace.css"><link rel="stylesheet" href="/static/checkin.css">
   <script src="/static/account-window.js" defer></script><script src="/static/workspace.js" defer></script><script src="/static/checkin.js" defer></script><script src="/static/checkin-teams.js" defer></script>
+  <script src="/static/checkin-beans.js" defer></script>
+  {% if config.get('PARTNER_LOGINS_ENABLED') %}<script src="/static/partner-logins.js" defer></script>{% endif %}
   <link rel="stylesheet" href="/static/mobile.css?v=mobile-1">
   <script src="/static/mobile.js?v=mobile-1" defer></script>
   {% include 'theme_head.html' %}
 </head>
 <body class="workspace-app" data-workspace="checkin"><main class="portal-shell checkin-shell">
-  <section class="checkin-heading"><div><h1>签到有礼</h1><p>使用共享账号，每天签到一次，按官方场次参加每周或月末秒杀。</p></div><div class="checkin-actions"><button id="checkin-refresh" class="secondary" type="button">刷新</button><button id="checkin-sign-now" class="secondary" type="button">立即签到</button><button id="checkin-configure" class="primary" type="button">配置自动任务</button></div></section>
+  <section class="checkin-heading"><div><h1>签到有礼</h1><p id="checkin-coverage">正在读取自动任务的账号覆盖范围…</p></div><div class="checkin-actions"><button id="checkin-refresh" class="secondary" type="button">刷新</button><button id="checkin-sign-now" class="secondary" type="button">立即签到</button><button id="checkin-sign-batch" class="quiet" type="button">批量签到</button><button id="checkin-configure" class="primary" type="button">配置自动任务</button></div></section>
   <p id="checkin-warning" class="checkin-notice" role="status" hidden></p><p id="checkin-feedback" class="checkin-feedback" role="status" hidden></p>
-  <section class="checkin-overview" aria-label="自动任务概览">
-    <article class="checkin-overview-card"><span class="checkin-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v16H4z M8 3v4 M16 3v4 M4 10h16 M8 15l3 3 5-5"/></svg></span><div><h2>每日签到 <span id="checkin-sign-count" class="checkin-count">正在读取</span></h2><p>默认覆盖所有有效账号，到点开始检查，未完成的当天补做。</p></div></article>
-    <article class="checkin-overview-card"><span class="checkin-symbol orange"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><div><h2><span id="checkin-flash-title">签到秒杀</span> <span id="checkin-flash-count" class="checkin-count">正在读取</span></h2><p id="checkin-flash-schedule">按北京时间的官方场次安排，自动识别每周或月末秒杀。</p></div></article>
-    {% if checkin_wechat_available %}<a class="checkin-overview-card checkin-channel-entry" href="/checkin/wechat"><span class="checkin-symbol green"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18 M7 6.5h.01 M10 6.5h.01 M8 14l2 2 5-4"/></svg></span><div><h2>微信渠道签到</h2><p>独立签到记录与登录会话</p></div><span class="checkin-channel-arrow" aria-hidden="true">→</span></a>{% endif %}
-  </section>
   <div class="workspace-account-layout">
-  {% with account_table="checkin-accounts", account_view="checkin-view-accounts" %}{% include "workspace_account_index.html" %}{% endwith %}
-  <div class="workspace-account-content">
-  <section class="checkin-list-panel" aria-label="账号签到与自动任务">
-    <div class="checkin-list-heading"><div class="checkin-tabs" role="group" aria-label="查看内容"><button id="checkin-view-accounts" class="selected" data-checkin-view="accounts" aria-pressed="true">账号签到情况 <span id="checkin-account-total">—</span></button><button data-checkin-view="tasks" aria-pressed="false">自动任务 <span id="checkin-task-count">—</span></button></div><input id="checkin-search" class="checkin-search" type="search" placeholder="搜索账号或号码尾号" aria-label="搜索签到账号或任务" autocomplete="off"></div>
-    <div id="checkin-account-controls" class="checkin-account-controls"><select id="checkin-account-state-filter" aria-label="筛选今日签到状态"><option value="all">全部签到状态</option><option value="signed">今日已签到</option><option value="unsigned">今日未签到</option><option value="unknown">尚未查询</option><option value="attention">需要处理</option></select><span id="checkin-account-summary">正在读取账号签到情况…</span></div>
-    <div id="checkin-task-controls" class="checkin-task-controls" hidden><div class="checkin-tabs" role="group" aria-label="任务类型筛选"><button class="selected" data-checkin-kind="all" aria-pressed="true">全部任务</button><button data-checkin-kind="signin" aria-pressed="false">每日签到</button><button data-checkin-kind="flash" aria-pressed="false">签到秒杀</button></div></div>
-    <div id="checkin-selection-bar" class="checkin-selection" hidden><label><input id="checkin-select-tasks" type="checkbox" disabled>全选可停止任务</label><div><span id="checkin-selected-tasks">已选 0 项</span><button id="checkin-clear-tasks" class="quiet" type="button" hidden>取消选择</button><button id="checkin-stop-tasks" class="secondary" type="button" disabled>停止所选</button></div></div>
-    <div id="checkin-accounts-view" class="checkin-table-wrap"><table class="checkin-table checkin-accounts-table" aria-label="各账号签到情况"><colgroup><col class="checkin-col-account"><col class="checkin-col-today"><col class="checkin-col-month"><col class="checkin-col-last-sign"><col class="checkin-col-auto"><col><col class="checkin-col-actions"></colgroup><thead><tr><th scope="col">共享账号</th><th scope="col">今日签到</th><th scope="col">当月累计</th><th scope="col">最近签到 · 北京时间</th><th scope="col">自动签到</th><th id="checkin-account-flash-title" scope="col">签到秒杀</th><th scope="col">操作</th></tr></thead><tbody id="checkin-accounts"><tr><td colspan="7" class="checkin-empty">正在读取各账号签到情况…</td></tr></tbody></table></div>
-    <div id="checkin-tasks-view" class="checkin-table-wrap" hidden><table class="checkin-table" aria-label="签到与秒杀自动任务"><colgroup><col class="checkin-col-select"><col class="checkin-col-account"><col class="checkin-col-kind"><col class="checkin-col-time"><col class="checkin-col-state"><col><col class="checkin-col-actions"></colgroup><thead><tr><th scope="col" aria-label="选择任务">选</th><th scope="col">执行账号</th><th scope="col">任务类型</th><th scope="col">下次检查 · 北京时间</th><th scope="col">状态</th><th scope="col">最近结果</th><th scope="col">操作</th></tr></thead><tbody id="checkin-tasks"><tr><td colspan="7" class="checkin-empty">正在读取任务…</td></tr></tbody></table></div>
-    <div class="checkin-list-footer"><span id="checkin-sync-state">北京时间 · 自动刷新</span><span>活动未开放时记录原因，不显示为执行成功。</span></div>
+  <aside class="workspace-account-rail workspace-account-index checkin-account-panel" aria-label="选择共享账号">
+    <div class="workspace-account-index-heading"><h2>共享账号 <span id="checkin-pool-count" class="count-chip">—</span></h2><button type="button" class="portal-quiet" data-account-window>账号管理</button></div>
+    <div id="checkin-account-list" class="workspace-account-list"><p class="workspace-account-index-empty">正在读取账号…</p></div>
+  </aside>
+  <div class="workspace-account-content checkin-work-area">
+  <label class="checkin-mobile-account" for="checkin-account-select">当前账号<select id="checkin-account-select" aria-label="选择共享账号"></select></label>
+  <section id="checkin-dashboard" class="checkin-list-panel checkin-dashboard" aria-labelledby="checkin-dashboard-title">
+    <header class="checkin-list-heading">
+      <h2 id="checkin-dashboard-title">当前账号</h2>
+      <div class="checkin-actions">
+        <button id="checkin-open-history" class="quiet" type="button" aria-haspopup="dialog" aria-controls="checkin-history" disabled>全部执行记录</button>
+        <button id="checkin-beans-open" class="secondary" type="button" aria-haspopup="dialog" aria-controls="checkin-beans" title="领豆任务与话费券兑换">签到专属 AI 豆</button>
+      </div>
+    </header>
+    <div class="checkin-dashboard-content">
+      <p id="checkin-account-empty" class="checkin-panel-message">正在读取签到情况…</p>
+      <div id="checkin-accounts" class="checkin-activity-grid" hidden>
+        <article class="checkin-activity-card" aria-labelledby="checkin-signin-title">
+          <header class="checkin-activity-heading"><h3 id="checkin-signin-title">每日签到</h3><span id="checkin-today-state"></span></header>
+          <div class="checkin-activity-result">
+            <dl class="checkin-activity-details">
+              <div><dt>当月累计</dt><dd><strong id="checkin-month-count">—</strong><span id="checkin-month-unit"> 次</span></dd></div>
+              <div><dt>最近签到</dt><dd><time id="checkin-last-signin"></time></dd></div>
+            </dl>
+            <p id="checkin-signin-result" class="checkin-result-note" hidden></p>
+          </div>
+          <div id="checkin-signin-task" class="checkin-card-automation"></div>
+        </article>
+        <article class="checkin-activity-card" aria-labelledby="checkin-account-flash-title">
+          <header class="checkin-activity-heading"><h3 id="checkin-account-flash-title">签到秒杀</h3><span id="checkin-flash-state"></span></header>
+          <div class="checkin-activity-result">
+            <dl id="checkin-flash-session" class="checkin-activity-details" hidden><div><dt>下场活动</dt><dd><time id="checkin-flash-next"></time></dd></div></dl>
+            <p id="checkin-flash-result" class="checkin-result-note" hidden></p>
+          </div>
+          <div id="checkin-flash-task" class="checkin-card-automation"></div>
+        </article>
+      </div>
+      <button id="checkin-relogin" class="secondary" type="button" data-account-window hidden>重新登录</button>
+      <div id="checkin-selection-bar" class="checkin-selection" hidden>
+        <label id="checkin-select-all" hidden><input id="checkin-select-tasks" type="checkbox" disabled>全选可停止任务</label>
+        <div><span id="checkin-selected-tasks"></span><button id="checkin-clear-tasks" class="quiet" type="button">取消选择</button><button id="checkin-stop-tasks" class="secondary" type="button">停止所选</button></div>
+      </div>
+    </div>
+    <div class="checkin-list-footer"><span id="checkin-sync-state">北京时间 · 自动刷新</span><span>定时任务需保持工作台运行、电脑联网且不休眠</span></div>
   </section>
   <section class="checkin-list-panel checkin-team-panel" aria-labelledby="checkin-team-title">
     <header class="checkin-list-heading">
-      <div><h2 id="checkin-team-title">组团签到</h2><p id="checkin-team-award-status" class="checkin-team-note">每日签到后核对，达标自动领奖。</p></div>
-      <div class="checkin-actions"><button id="checkin-team-preview" class="secondary" type="button">查询并预览</button><button id="checkin-team-award" class="secondary" type="button">立即检查领奖</button><button id="checkin-team-join" class="primary" type="button" hidden>确认组队</button></div>
+      <div class="checkin-team-summary">
+        <div class="checkin-team-heading"><h2 id="checkin-team-title">组团签到</h2><span>全体有效账号</span></div>
+        <p id="checkin-team-award-status" class="checkin-team-note">每日签到后核对，达标自动领奖。</p>
+      </div>
+      <div class="checkin-actions"><button id="checkin-team-preview" class="secondary" type="button" aria-controls="checkin-team-body">查询并预览</button><button id="checkin-team-award" class="secondary" type="button" aria-controls="checkin-team-body">立即检查领奖</button><button id="checkin-team-join" class="primary" type="button" hidden>确认组队</button></div>
     </header>
-    <div class="checkin-team-body">
-      <p id="checkin-team-feedback" class="checkin-team-note" role="status">查询官方资格后，按各账号已签到次数分配队伍。</p>
+    <div id="checkin-team-body" class="checkin-team-body" hidden>
+      <p id="checkin-team-feedback" class="checkin-team-note" role="status"></p>
       <ol id="checkin-team-groups" class="checkin-team-groups" hidden></ol>
       <details id="checkin-team-accounts" hidden><summary>各账号组团状态</summary><ul id="checkin-team-account-rows" class="checkin-team-accounts"></ul></details>
     </div>
   </section>
-  <p class="checkin-footnote">定时任务需要本地服务持续运行，电脑保持开机、联网且不休眠。</p>
+  {% for channel in workspace_features() if channel.navigation == 'checkin' and channel.active %}
+  <a class="checkin-channel-entry" href="{{ channel.home }}"><strong>{{ channel.title }}</strong>{% if channel.id == 'wechat-checkin' %}<span>独立登录与签到记录</span>{% endif %}<span class="checkin-channel-arrow" aria-hidden="true">→</span></a>
+  {% endfor %}
   </div>
   </div>
 </main>
@@ -65,5 +101,82 @@
   <div class="checkin-dialog-actions"><button type="button" class="secondary" data-checkin-close="checkin-editor">取消</button><button id="checkin-save" type="submit" class="primary">保存自动任务</button></div>
 </form></dialog>
 <dialog id="checkin-history" aria-labelledby="checkin-history-title"><div class="checkin-dialog-heading"><div><h2 id="checkin-history-title">执行记录</h2><p id="checkin-history-description"></p></div><button type="button" class="close quiet" data-checkin-close="checkin-history" aria-label="关闭执行记录">×</button></div><div id="checkin-history-body"></div></dialog>
+<dialog id="checkin-beans" aria-labelledby="checkin-beans-dialog-title">
+  <header class="checkin-beans-heading">
+    <div><span class="checkin-beans-eyebrow">签到有礼</span><h2 id="checkin-beans-dialog-title">签到专属 AI 豆</h2></div>
+    <div class="checkin-beans-heading-actions">{% if config.get('PARTNER_LOGINS_ENABLED') %}<button id="checkin-partners-open" class="secondary" type="button">合作方登录</button>{% endif %}<form method="dialog"><button class="close quiet" aria-label="关闭 AI 豆面板"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12 M18 6 6 18"/></svg></button></form></div>
+  </header>
+  <div id="checkin-beans-content" class="checkin-beans-layout" aria-busy="false">
+    <aside class="checkin-beans-sidebar" aria-label="账号与 AI 豆资产">
+      <div class="checkin-beans-controls">
+        <span>当前账号</span>
+        <div><strong id="checkin-beans-account-name">请选择左侧账号</strong><button id="checkin-beans-refresh" class="secondary" type="button" aria-label="刷新 AI 豆状态" title="刷新状态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 7v5h-5 M5 17v-5h5 M18 11a6.5 6.5 0 0 0-11-5L5 8 M6 13a6.5 6.5 0 0 0 11 5l2-2"/></svg></button></div>
+      </div>
+      <section class="checkin-beans-wallet" aria-label="本月 AI 豆">
+        <dl class="checkin-beans-balance">
+          <div class="checkin-beans-available"><dt>可用 AI 豆</dt><dd id="checkin-beans-balance">—</dd><dd class="checkin-beans-expiry">本月有效 · 月底清零</dd></div>
+          <div><dt>本月累计</dt><dd id="checkin-beans-earned">—</dd></div>
+          <div><dt>已兑换消耗</dt><dd id="checkin-beans-spent">—</dd></div>
+        </dl>
+        <button id="checkin-beans-go-prizes" type="button">兑换话费券 <span aria-hidden="true">→</span></button>
+      </section>
+      <section class="checkin-beans-automation" aria-labelledby="checkin-beans-auto-title">
+        <h3 id="checkin-beans-auto-title"><span class="checkin-beans-auto-dot" aria-hidden="true"></span>自动领豆</h3>
+        <p>覆盖全部有效账号，按自动签到配置时间开始检查，晚启动会补做。</p>
+        <div class="checkin-beans-run-actions"><button id="checkin-beans-run" class="primary" type="button">执行当前账号</button><button id="checkin-beans-run-all" class="secondary" type="button">执行全部账号</button></div>
+        <p id="checkin-beans-run-status" role="status">等待今日自动检查</p>
+      </section>
+      <details class="checkin-beans-rules"><summary>领取与兑换规则</summary><p>每天从自动签到配置时间开始检查，晚启动补做未完成任务。自动执行已接入任务，并领取官方确认可领取的奖励。新增或恢复登录的有效账号自动纳入。</p><p>AI 豆月底清零；官方每天 08:00 补充兑换库存，兑换后可在「我的卡券」查看。</p></details>
+    </aside>
+    <div class="checkin-beans-main">
+      <nav class="checkin-beans-tabs" aria-label="AI 豆内容">
+        <button class="selected" type="button" data-beans-view="tasks" aria-pressed="true">领豆任务 <span id="checkin-beans-task-total">—</span></button>
+        <button type="button" data-beans-view="prizes" aria-pressed="false">话费券兑换 <span id="checkin-beans-prize-total">—</span></button>
+      </nav>
+      <p id="checkin-beans-status" role="status" aria-live="polite">正在读取账号信息…</p>
+      <div id="checkin-beans-placeholder" class="checkin-beans-placeholder" aria-hidden="true" hidden>{% for i in range(6) %}<div><i></i><i></i><i></i></div>{% endfor %}</div>
+      <section id="checkin-beans-tasks" aria-label="领豆任务">
+        <div class="checkin-beans-progress-heading"><div><h3>任务进度</h3><p id="checkin-beans-progress-text">等待查询官方记录</p></div><strong id="checkin-beans-progress-count">—</strong></div>
+        <progress id="checkin-beans-progress" max="1" value="0" aria-label="已领取任务占比"></progress>
+        <label class="checkin-beans-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="checkin-beans-search" type="search" placeholder="搜索任务名称" aria-label="搜索 AI 豆任务" autocomplete="off"></label>
+        <div class="checkin-beans-filters" role="group" aria-label="筛选 AI 豆任务">
+          <button class="selected" type="button" data-beans-filter="automatic" aria-pressed="true">可做任务 <span>—</span></button>
+          <button type="button" data-beans-filter="claimable" aria-pressed="false">待领取 <span>—</span></button>
+          <button type="button" data-beans-filter="claimed" aria-pressed="false">已领取 <span>—</span></button>
+          <button type="button" data-beans-filter="unsupported" aria-pressed="false">暂未接通 <span>—</span></button>
+          <button type="button" data-beans-filter="all" aria-pressed="false">全部 <span>—</span></button>
+        </div>
+        <p id="checkin-beans-filter-summary" class="checkin-beans-note"></p>
+        <div id="checkin-beans-task-list"></div>
+      </section>
+      <section id="checkin-beans-prizes" aria-label="话费券兑换" hidden>
+        <div class="checkin-beans-prize-heading"><h3>把 AI 豆换成话费</h3><p>每天 08:00 补充库存 · 兑换结果以官方确认为准</p></div>
+        <ul id="checkin-beans-prize-list" class="checkin-beans-prize-grid"></ul>
+        <div id="checkin-beans-confirm" class="checkin-beans-confirm" hidden>
+          <div><strong>确认本次兑换</strong><p id="checkin-beans-confirm-text"></p></div>
+          <div class="checkin-actions"><button id="checkin-beans-cancel" class="secondary" type="button">取消</button><button id="checkin-beans-redeem" class="primary" type="button">确认兑换</button></div>
+        </div>
+        <p class="checkin-beans-note">兑换成功后，前往「我的卡券」查看与使用。</p>
+      </section>
+    </div>
+  </div>
+</dialog>
+{% if config.get('PARTNER_LOGINS_ENABLED') %}<dialog id="partner-logins" aria-labelledby="partner-logins-title">
+  <header class="partner-login-heading"><div><h2 id="partner-logins-title">合作方登录态</h2><p id="partner-current-account"></p></div><button id="partner-close" class="quiet" type="button" aria-label="关闭合作方登录">×</button></header>
+  <div class="partner-login-body">
+    <p class="partner-login-note">先检查已有会话；失效后扫码确认或导入本人新资料，身份核对成功才替换。有效会话持续复用，后续任务无需连接手机。</p>
+    <div id="partner-services" class="partner-service-grid"></div>
+    <p id="partner-feedback" class="partner-feedback" role="status" aria-live="polite"></p>
+    <section id="partner-qr" class="partner-qr" hidden><h3 id="partner-qr-title"></h3><img id="partner-qr-image" alt="官方扫码登录二维码"><p id="partner-qr-status" role="status">等待扫码确认</p><button id="partner-qr-cancel" class="secondary" type="button">结束本次扫码</button></section>
+    <details id="partner-import"><summary>手动更新登录资料</summary><p class="partner-login-note">支持当前合作方的 Cookie、Cookie JSON 或 Netscape 文件。也可恢复本人已导出的登录资料；先校验身份，再替换旧会话。请勿在聊天中发送凭据。</p>
+      <label>合作方<select id="partner-import-service"><option value="baidu-map">百度地图</option><option value="taobao">淘宝 / 菜鸟</option></select></label>
+      <label>登录资料<textarea id="partner-import-text" rows="5" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="粘贴当前合作方的 Cookie 或 JSON"></textarea></label>
+      <div class="partner-import-actions"><input id="partner-import-file" type="file" accept=".json,.txt"><button id="partner-import-submit" class="primary" type="button">验证并更新</button></div>
+      <p class="partner-login-note">首次配置百度地图的 JSON 还需包含本人 phone_info（cuid、sv）；已有资料会在后续扫码更新时复用。</p>
+    </details>
+    <div class="partner-data-directory"><span>统一账号数据目录</span><code id="partner-data-directory">正在读取…</code><button id="partner-copy-directory" class="quiet" type="button">复制路径</button></div>
+  </div>
+</dialog>
+{% endif %}
 </body>
 </html>

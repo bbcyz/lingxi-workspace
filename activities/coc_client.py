@@ -13,10 +13,10 @@ from cryptography.hazmat.primitives import padding, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from app_login import AppCredentialError, AppLoginError, AppLoginSession
-from http_transport import requests
+from workspace.accounts.login import AppCredentialError, AppLoginError, AppLoginSession
+from workspace.http_transport import requests
 from recharge.cmcc import APP_UA
-from star_day_auth import encrypt_uid
+from features.star_day.auth import encrypt_uid
 from .coc_environment import collect, collect_mobile
 
 ORIGIN = 'https://dev.coc.10086.cn'

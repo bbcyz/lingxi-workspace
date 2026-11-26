@@ -4,9 +4,9 @@ from datetime import datetime
 import unittest
 from unittest.mock import Mock, patch
 
-from http_transport import requests
+from workspace.http_transport import requests
 from recharge.cmcc import SHANGHAI
-from star_day_auth import star_day_session, StarDayAuthError, encrypt_uid, UID_PUBLIC_MODULUS, CHECK_UID_PATH, ORIGIN, ENTRY_URL
+from features.star_day.auth import star_day_session, StarDayAuthError, encrypt_uid, UID_PUBLIC_MODULUS, CHECK_UID_PATH, ORIGIN, ENTRY_URL
 
 
 class StarDayAuthTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class StarDayAuthTests(unittest.TestCase):
         self.client.cookies.set('access_token','campaign-token',domain='qqt.cmicrwx.cn')
         self.flow=Mock();self.flow.call.return_value=(200,{'retCode':'000000'},{})
     def test_bridge_uses_original_uid_and_campaign_uses_separate_encryption(self):
-        with patch('star_day_auth.AppLoginSession.from_credentials',return_value=self.flow),patch('star_day_auth.encrypt_uid',return_value='encrypted-uid'):
+        with patch('features.star_day.auth.AppLoginSession.from_credentials',return_value=self.flow),patch('features.star_day.auth.encrypt_uid',return_value='encrypted-uid'):
             with star_day_session(lambda:deepcopy(self.snapshot),session_factory=lambda:self.client) as (client,snapshot):
                 self.assertIs(client,self.client)
                 self.assertEqual(snapshot['phone'],self.snapshot['phone'])
@@ -30,7 +30,7 @@ class StarDayAuthTests(unittest.TestCase):
         self.client.close.assert_called_once()
     def test_uid_encryption_uses_native_rsa_s1_and_time_plaintext(self):
         key=Mock();key.encrypt.return_value=b'cipher'
-        with patch('star_day_auth.rsa.RSAPublicNumbers') as numbers:
+        with patch('features.star_day.auth.rsa.RSAPublicNumbers') as numbers:
             numbers.return_value.public_key.return_value=key
             self.assertEqual(encrypt_uid('uid',datetime(2026,10,31,10,0,0,tzinfo=SHANGHAI)),base64.b64encode(b'cipher').decode())
             numbers.assert_called_once_with(65537,UID_PUBLIC_MODULUS)
@@ -41,7 +41,7 @@ class StarDayAuthTests(unittest.TestCase):
             with star_day_session(lambda:self.snapshot,session_factory=lambda:self.client):pass
         self.assertEqual(caught.exception.status,401);self.client.post.assert_not_called()
     def test_activity_error_or_missing_cookie_never_yields_authenticated_session(self):
-        with patch('star_day_auth.AppLoginSession.from_credentials',return_value=self.flow),patch('star_day_auth.encrypt_uid',return_value='encrypted-uid'):
+        with patch('features.star_day.auth.AppLoginSession.from_credentials',return_value=self.flow),patch('features.star_day.auth.encrypt_uid',return_value='encrypted-uid'):
             for mode in ('denied','no-cookie'):
                 self.client.post.return_value.json.return_value={'status':'0'} if mode=='denied' else {'status':'1'}
                 self.client.cookies=requests.Cookies()
@@ -52,7 +52,7 @@ class StarDayAuthTests(unittest.TestCase):
             self.snapshot['credential_revision']+=1
             return Mock(status_code=200,json=lambda:{'status':'1'})
         self.client.post.side_effect=campaign
-        with patch('star_day_auth.AppLoginSession.from_credentials',return_value=self.flow),patch('star_day_auth.encrypt_uid',return_value='encrypted-uid'):
+        with patch('features.star_day.auth.AppLoginSession.from_credentials',return_value=self.flow),patch('features.star_day.auth.encrypt_uid',return_value='encrypted-uid'):
             with star_day_session(lambda:deepcopy(self.snapshot),session_factory=lambda:self.client):pass
             def changed(*args,**kwargs):
                 self.snapshot['cookie']='JSESSIONID=new; UID=original-uid'

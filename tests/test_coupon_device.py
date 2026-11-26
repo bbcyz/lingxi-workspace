@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from coupon_device import (APP_ID, DOMAIN, LID_COOKIE, SERVER, TOKEN_COOKIE,
+from features.coupons.device import (APP_ID, DOMAIN, LID_COOKIE, SERVER, TOKEN_COOKIE,
                            CouponDevice, CouponDeviceError, decode_param, encode_param)
-from http_transport import requests
+from workspace.http_transport import requests
 
 
 class Client:

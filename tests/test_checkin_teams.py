@@ -2,9 +2,9 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode
 import unittest
 
-from checkin_client import CheckinError, ENTRY
-from checkin_scheduler import CheckinScheduler, CheckinTaskError
-from checkin_teams import CheckinTeams, _parse_team
+from features.checkin.client import CheckinError, ENTRY
+from features.checkin.scheduler import CheckinScheduler, CheckinTaskError
+from features.checkin.teams import CheckinTeams, _parse_team
 from recharge.cmcc import SHANGHAI
 from tests.test_checkin_scheduler import QueueExecutor
 

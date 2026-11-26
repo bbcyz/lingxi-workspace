@@ -4,8 +4,8 @@ import base64
 import unittest
 from unittest.mock import Mock
 
-from credential_cache import CredentialCache
-from coupon_notices import CouponNotices,SCOPE,INTERVAL
+from workspace.accounts.credentials import CredentialCache
+from features.coupons.notices import CouponNotices,SCOPE,INTERVAL
 from tests.test_coupon_client import encoded,Response
 from curl_cffi import requests
 

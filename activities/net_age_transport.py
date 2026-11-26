@@ -13,7 +13,7 @@ import time
 from threading import Lock, Thread
 from urllib.request import Request
 
-from http_transport import requests
+from workspace.http_transport import requests
 
 
 TARGET = 'dev.coc.10086.cn'

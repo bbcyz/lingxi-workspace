@@ -3,9 +3,9 @@ from unittest.mock import Mock
 
 from flask import Flask
 
-from app_login import LOGIN_SLIDER_APP_ID
-from coupon_captcha import APP_ID, OFFICIAL_ORIGIN, register_coupon_captcha
-from http_transport import requests
+from workspace.accounts.login import LOGIN_SLIDER_APP_ID
+from features.coupons.captcha import APP_ID, OFFICIAL_ORIGIN, register_coupon_captcha
+from workspace.http_transport import requests
 
 
 class Upstream:

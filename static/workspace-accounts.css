@@ -5,7 +5,7 @@
   .workspace-app .workspace-account-layout,
   .workspace-app .dashboard-panels {
     display: grid;
-    grid-template-columns: clamp(230px, 18vw, 288px) minmax(0, 1fr);
+    grid-template-columns: clamp(184px, 13vw, 216px) minmax(0, 1fr);
     align-items: start;
     gap: 18px;
   }
@@ -17,8 +17,22 @@
     align-self: start;
     min-width: 0;
     margin-bottom: 0;
-    padding: 15px 16px;
+    padding: 14px 12px;
   }
+
+  .workspace-app .workspace-account-rail :is(.wed-account-heading, .bills-account-heading, .coupons-account-heading, .rights-panel-heading) {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+
+  .workspace-app .workspace-account-rail :is(.wed-account-heading, .bills-account-heading, .coupons-account-heading, .rights-panel-heading) > span {
+    flex-basis: 100%;
+    max-width: none;
+    text-align: start;
+  }
+
+  .workspace-app .workspace-account-rail .rights-panel-heading { padding: 0 0 12px; }
+  .workspace-app .workspace-account-rail :is(.rights-accounts, .rights-error) { margin-inline: 0; }
 
   .workspace-app .workspace-account-rail .workspace-account-list {
     display: grid;
@@ -74,7 +88,7 @@
   .workspace-app tr.workspace-account-target { scroll-margin-top: calc(var(--ws-topbar) + 16px); }
   .workspace-app tr.workspace-account-target:focus { outline: 2px solid var(--ws-blue); outline-offset: -2px; }
 
-  .bills-shell .workspace-account-content { container-type: inline-size; }
+  .bills-shell .workspace-account-content { container: information-workspace / inline-size; }
   @container (max-width: 720px) {
     .bills-shell .information-columns {
       grid-template-columns: minmax(0, 1fr);

@@ -5,8 +5,8 @@ from unittest import TestCase, main
 from unittest.mock import patch
 
 from app import create_app
-from login_storage import DatabaseLoginStorage
-from network_access import NetworkError, NetworkSettings, create_http_server
+from workspace.accounts.storage import DatabaseLoginStorage
+from workspace.network_access import NetworkError, NetworkSettings, create_http_server
 
 
 class NetworkSettingsTests(TestCase):
@@ -43,7 +43,7 @@ class NetworkSettingsTests(TestCase):
         records = [{'address':v,'interface_id':'nic-a','interface_name':'测试网卡'}
                    for v in ('192.168.31.176','2409:8a6a::1234','fe80::1','127.0.0.1')]
         manager = NetworkSettings()
-        with patch('network_interfaces._windows_addresses',return_value=records):
+        with patch('workspace.network_interfaces._windows_addresses',return_value=records):
             value = manager.status(5500)
         self.assertEqual(value['ipv4'],['http://192.168.31.176:5500/'])
         self.assertEqual(value['ipv6'],['http://[2409:8a6a::1234]:5500/'])
@@ -53,7 +53,7 @@ class NetworkSettingsTests(TestCase):
         manager.plan([{'address': '192.0.2.10', 'family': 'ipv4', 'interface_id': 'nic',
                        'interface_name': '示例网卡'}])
         manager.attach(5500, [('0.0.0.0', 5500), ('::1', 5500)])
-        with patch('network_access.interface_addresses') as scan:
+        with patch('workspace.network_access.interface_addresses') as scan:
             self.assertEqual(manager.sidebar(), {
                 'active': {'ipv4': True, 'ipv6': False},
                 'listening': {'ipv4': ['http://192.0.2.10:5500/'], 'ipv6': []},
@@ -86,7 +86,7 @@ class NetworkSettingsTests(TestCase):
     def test_custom_listener_accepts_selected_ip_and_refuses_other_local_ips(self):
         import os,threading
         from urllib.request import build_opener,ProxyHandler
-        from network_access import local_addresses
+        from workspace.network_access import local_addresses
         addresses = [str(address) for address in local_addresses() if address.version == 4]
         if len(addresses) < 2:
             self.skipTest('This check needs two local IPv4 interfaces')
@@ -125,7 +125,7 @@ class NetworkSettingsTests(TestCase):
         app = create_app()
         manager = app.extensions['network_settings']
         manager.update({'ipv4':True,'ipv6':True,'custom':True,'addresses':['192.0.2.222']})
-        with patch.dict(os.environ),patch('network_access.interface_addresses',return_value=[]):
+        with patch.dict(os.environ),patch('workspace.network_access.interface_addresses',return_value=[]):
             os.environ.pop('LINGXI_HOST',None)
             server = create_http_server(app,0)
             try:

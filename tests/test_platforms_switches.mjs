@@ -13,7 +13,7 @@ class Element {
 }
 const descendants=node=>[node,...node.children.flatMap(descendants)];
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
-async function fixture({fail=false,removed=false,endReason=null}={}){
+async function fixture({fail=false,removed=false,endReason=null,packages=false}={}){
   const nodes=new Map(),calls=[],events=[];
   const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
   const features=[{id:'star-day',title:'星动日',home:'/star-day',enabled:true,state:'running',active:true,can_delete:false},
@@ -23,9 +23,16 @@ async function fixture({fail=false,removed=false,endReason=null}={}){
     {id:'deleted',title:'已移除渠道',state:'deleted',active:false,can_delete:true,removal_pending:false},
     {id:'pending',title:'待清理渠道',state:'deleted',active:false,can_delete:true,removal_pending:true});
   const defaultOrder=features.filter(row=>row.state!=='deleted').map(row=>row.id);
+  const packagesStatus=[];
+  if(packages)features[1].version='1.0.0';
   vm.runInNewContext(fs.readFileSync(new URL('../static/platforms.js',import.meta.url),'utf8'),{
-    document:{getElementById:get,createElement:tag=>new Element(tag)},
+    document:{getElementById:id=>id.startsWith('platforms-package-')&&!packages?null:get(id),createElement:tag=>new Element(tag)},
     fetch:async(url,options)=>{
+      if(url==='/api/platforms/packages'){
+        calls.push({url,options});
+        packagesStatus.push({id:'test-package',title:'测试活动',state:'pending',active:false,pending_version:'1.0.0'});
+        return {ok:true,json:async()=>({message:'已导入，重新启动工具台后生效。'})};
+      }
       calls.push({url,payload:options?.body&&JSON.parse(options.body)});
       if(options?.method==='POST'){
         if(fail)return {ok:false,json:async()=>({error:'保存失败'})};
@@ -37,10 +44,25 @@ async function fixture({fail=false,removed=false,endReason=null}={}){
         features[0].enabled=JSON.parse(options.body).enabled;features[0].active=features[0].enabled;
         return {ok:true,json:async()=>({features,message:'已保存'})};
       }
-      return {ok:true,json:async()=>url==='/api/features'?{features,default_order:defaultOrder}:{platforms:features.filter(row=>row.can_delete),warning:''}};
+      return {ok:true,json:async()=>url==='/api/features'?{features,default_order:defaultOrder}:{platforms:[...features.filter(row=>row.can_delete),...packagesStatus],warning:''}};
     },window:{addEventListener(){},dispatchEvent(event){events.push(event.type);}},Event:class{constructor(type){this.type=type;}},setInterval(){}});
   await flush();return {get,calls,events};
 }
+
+test('import uploads the selected ZIP and exposes pending status and export links',async()=>{
+  const {get,calls}=await fixture({packages:true});
+  const file={name:'test-package.zip'},input=get('platforms-package-file');
+  input.files=[file];
+  await input.handlers.change();
+  const upload=calls.find(call=>call.url==='/api/platforms/packages');
+  assert.equal(upload.options.body,file);
+  assert.equal(upload.options.headers['Content-Type'],'application/zip');
+  assert.match(get('platforms-package-feedback').textContent,/重新启动/);
+  const rows=descendants(get('platforms-rows'));
+  assert.ok(rows.some(node=>node.textContent==='待重启生效'));
+  assert.ok(rows.some(node=>node.href==='/api/platforms/seven-day/package'));
+  assert.ok(rows.some(node=>node.href==='/api/platforms/test-package/package'));
+});
 
 test('all business features have accessible switches; expired activities cannot be reopened',async()=>{
   const {get}=await fixture();

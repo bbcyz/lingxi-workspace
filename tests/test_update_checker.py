@@ -11,8 +11,8 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
 from app import create_app
-from login_storage import DatabaseLoginStorage
-from update_checker import ANDROID_API_URL, CHECK_INTERVAL, REPOSITORY, UpdateChecker, fetch_release, version_numbers
+from workspace.accounts.storage import DatabaseLoginStorage
+from workspace.update_checker import ANDROID_API_URL, CHECK_INTERVAL, REPOSITORY, UpdateChecker, fetch_release, version_numbers
 
 
 def release(version='1.4.0'):
@@ -133,7 +133,7 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertEqual(status['checked_at'], 1000)
 
     def test_fetch_only_uses_public_github_metadata_and_conditional_headers(self):
-        with patch('update_checker.urlopen', side_effect=HTTPError('url', 304, 'same', {}, None)) as opener:
+        with patch('workspace.update_checker.urlopen', side_effect=HTTPError('url', 304, 'same', {}, None)) as opener:
             self.assertEqual(fetch_release('known-etag'), (False, 'known-etag'))
         request = opener.call_args.args[0]
         self.assertEqual(request.get_header('If-none-match'), 'known-etag')
@@ -150,7 +150,7 @@ class UpdateCheckerTests(unittest.TestCase):
         preview = {**release('1.10.1'), 'prerelease': True}
         response = BytesIO(json.dumps([windows_only, release('1.9.2'), preview, android, unpublished]).encode())
         response.headers = {'ETag':'android-release-list'}
-        with patch('update_checker.urlopen', return_value=response) as opener:
+        with patch('workspace.update_checker.urlopen', return_value=response) as opener:
             checker = UpdateChecker(current_version='1.9.2', platform='android')
             checker.request_check()
             status = wait(checker)

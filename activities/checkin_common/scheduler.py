@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import re
 from threading import Event, RLock, Thread
 
-from login_storage import LoginStorageError
+from workspace.accounts.storage import LoginStorageError
 from recharge.cmcc import SHANGHAI
 from .client import WebCheckinClient, WebCheckinError
 

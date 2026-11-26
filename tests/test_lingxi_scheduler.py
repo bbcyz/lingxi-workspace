@@ -12,9 +12,9 @@ from unittest.mock import Mock,patch
 from cryptography.fernet import Fernet
 
 from app import create_app
-from lingxi_client import LingxiError
-from lingxi_scheduler import LingxiScheduler,TaskError,SHANGHAI,validate_plan
-from login_storage import DatabaseLoginStorage,LoginStorageError
+from features.lingxi.client import LingxiError
+from features.lingxi.scheduler import LingxiScheduler,TaskError,SHANGHAI,validate_plan
+from workspace.accounts.storage import DatabaseLoginStorage,LoginStorageError
 
 
 class SchedulerTests(unittest.TestCase):

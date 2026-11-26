@@ -7,9 +7,9 @@ import unittest
 from unittest.mock import patch
 from urllib.request import Request
 
-from coupon_device import APP_ID, DOMAIN, LID_COOKIE, TOKEN_COOKIE, decode_param
-from coupon_recharge_device import COOKIE_SECONDS, SERVER, SCOPE, RechargeDeviceError, RechargeDevices
-from http_transport import RequestException, requests
+from features.coupons.device import APP_ID, DOMAIN, LID_COOKIE, TOKEN_COOKIE, decode_param
+from features.coupons.recharge_device import COOKIE_SECONDS, SERVER, SCOPE, RechargeDeviceError, RechargeDevices
+from workspace.http_transport import RequestException, requests
 
 
 NOW = 2_000_000_000
@@ -27,6 +27,29 @@ class Storage:
 
     def save_activity_data(self, scope, value):
         self.data[scope] = deepcopy(value)
+
+
+class DeviceAppIsolationTests(unittest.TestCase):
+    def test_payment_application_reuses_only_its_own_account_ticket_across_restart(self):
+        storage = Storage()
+        devices = RechargeDevices(storage,clock=lambda:NOW)
+        order_client = Client({'status':1,'data':'order-app-device-token'})
+        devices.prepare('account-a',order_client)
+        payment = devices.for_app('official-payment-app')
+        payment_client = Client({'status':1,'data':'payment-app-device-token'})
+        payment.prepare('account-a',payment_client)
+        self.assertIs(payment,devices.for_app('official-payment-app'))
+        self.assertEqual(decode_param(payment_client.calls[0][2]['param'])['appKey'],'official-payment-app')
+        self.assertEqual(storage.data[SCOPE]['account-a']['token'],'order-app-device-token')
+        self.assertEqual(storage.data[payment.scope]['account-a']['token'],'payment-app-device-token')
+        restored = RechargeDevices(storage,clock=lambda:NOW+1).for_app('official-payment-app')
+        new_client = Client()
+        self.assertTrue(restored.prepare('account-a',new_client)['reused'])
+        self.assertEqual(new_client.calls,[])
+        self.assertEqual(new_client.cookies.get(TOKEN_COOKIE),'payment-app-device-token')
+        devices.forget('account-a')
+        self.assertNotIn('account-a',storage.data[SCOPE])
+        self.assertNotIn('account-a',storage.data[payment.scope])
 
 
 class Client:
@@ -95,11 +118,11 @@ class RechargeDevicesTests(unittest.TestCase):
 
     def test_minus_four_corrects_lid_and_sends_only_actual_minimal_environment(self):
         client = Client({'status': -4, 'data': 'CORRECTED_LID'}, {'status': 2, 'data': TOKEN})
-        with patch('coupon_recharge_device.platform.system', return_value='TestOS'), \
-             patch('coupon_recharge_device.platform.release', return_value='R1'), \
-             patch('coupon_recharge_device.platform.python_version', return_value='3.12.10'), \
-             patch('coupon_recharge_device.VERSION', 'test-version'), \
-             patch('coupon_recharge_device.os.cpu_count', return_value=7):
+        with patch('features.coupons.recharge_device.platform.system', return_value='TestOS'), \
+             patch('features.coupons.recharge_device.platform.release', return_value='R1'), \
+             patch('features.coupons.recharge_device.platform.python_version', return_value='3.12.10'), \
+             patch('features.coupons.recharge_device.VERSION', 'test-version'), \
+             patch('features.coupons.recharge_device.os.cpu_count', return_value=7):
             RechargeDevices(clock=lambda: NOW).prepare('a', client)
         first, second = [decode_param(c[2]['param']) for c in client.calls]
         self.assertEqual(set(second), {'lid', 'lidType', 'cache', 'appKey', 'pro', 'ua', 'np', 'hc', 'to'})
@@ -114,7 +137,7 @@ class RechargeDevicesTests(unittest.TestCase):
 
     def test_minus_six_retains_lid_and_unknown_cpu_is_not_fabricated(self):
         client = Client({'status': -6}, {'status': 2, 'data': TOKEN})
-        with patch('coupon_recharge_device.os.cpu_count', return_value=None):
+        with patch('features.coupons.recharge_device.os.cpu_count', return_value=None):
             RechargeDevices(clock=lambda: NOW).prepare('a', client)
         first, second = [decode_param(c[2]['param']) for c in client.calls]
         self.assertEqual(first['lid'], second['lid'])
@@ -175,7 +198,7 @@ class RechargeDevicesTests(unittest.TestCase):
         restarted = RechargeDevices(storage, lambda: NOW + 30)
         second = Client()
         second.cookies.set('APP_COOKIE_VERSION', 'new', domain=DOMAIN)
-        with patch('coupon_recharge_device.VERSION', 'future-version'):
+        with patch('features.coupons.recharge_device.VERSION', 'future-version'):
             result = restarted.prepare('a', second)
         self.assertEqual(result, {'prepared': True, 'reused': True, 'expires_at': NOW + COOKIE_SECONDS})
         self.assertEqual(second.calls, [])
@@ -287,7 +310,7 @@ class RechargeDevicesTests(unittest.TestCase):
             leader.entered, leader.release = Event(), Event()
             followers = [Client() for _ in range(3)]
             service = RechargeDevices(clock=lambda: NOW)
-            with self.subTest(failure=failure), patch('coupon_recharge_device.Future', ObservedFuture), \
+            with self.subTest(failure=failure), patch('features.coupons.recharge_device.Future', ObservedFuture), \
                     ThreadPoolExecutor(max_workers=4) as pool:
                 tasks = [pool.submit(service.prepare, 'a', leader)]
                 self.assertTrue(leader.entered.wait(2))

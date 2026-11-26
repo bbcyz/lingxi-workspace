@@ -6,14 +6,14 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from http_transport import requests
-from login_storage import DatabaseLoginStorage
+from workspace.http_transport import requests
+from workspace.accounts.storage import DatabaseLoginStorage
 from recharge.cmcc import SHANGHAI
-from star_day_auth import StarDaySessionCache,StarDayAuthError,star_day_session,WEB_UA
-from star_day_crypto import sm3,encrypt_sms_phone,encrypt_login_value,P,A,PUBLIC
-from star_day_sms import StarDaySmsLogin
-from star_day_scheduler import StarDayScheduler
-from star_day_client import StarDayClient
+from features.star_day.auth import StarDaySessionCache,StarDayAuthError,star_day_session,WEB_UA
+from features.star_day.crypto import sm3,encrypt_sms_phone,encrypt_login_value,P,A,PUBLIC
+from features.star_day.sms import StarDaySmsLogin
+from features.star_day.scheduler import StarDayScheduler
+from features.star_day.client import StarDayClient
 from tests.test_star_day import Queue
 
 
@@ -32,7 +32,7 @@ class SmsTests(unittest.TestCase):
         x,y=PUBLIC
         self.assertEqual((y*y-x*x*x-A*x-0x28E9FA9E9D9F5E344D5A9E4BCF6509A7F39789F515AB8F92DDBCBD414D940E93)%P,0)
         self.assertEqual(encrypt_login_value('123456'),'F/QpecCBCSh/8dobHXi7ug==')
-        with patch('star_day_crypto.secrets.randbelow',return_value=1):
+        with patch('features.star_day.crypto.secrets.randbelow',return_value=1):
             encrypted=encrypt_sms_phone('13800000001',self.stamp*1000)
         self.assertTrue(encrypted.startswith('04'))
         self.assertEqual(len(encrypted),2+128+len('MTM4MDAwMDAwMDE6MTc5MzQ3NTAwMDAwMA==')*2+64)
@@ -57,7 +57,7 @@ class SmsTests(unittest.TestCase):
             'phone':encrypt_login_value(self.snapshot['phone']),'smsCode':encrypt_login_value('123456')})
         self.assertEqual(self.cache.load('a',self.snapshot['phone'])['expires_at'],self.stamp+7200)
         self.client.close.assert_not_called()
-        with patch('star_day_auth.AppLoginSession.from_credentials') as primary:
+        with patch('features.star_day.auth.AppLoginSession.from_credentials') as primary:
             with star_day_session(lambda:self.snapshot,cache=self.cache,allow_login=False) as (client,_):
                 self.assertIs(client,self.client)
                 self.assertEqual(client.headers['User-Agent'],WEB_UA)
@@ -88,7 +88,7 @@ class SmsTests(unittest.TestCase):
         queue=Queue()
         scheduler=StarDayScheduler(lambda _:deepcopy(self.snapshot),lambda:[{'id':'a','status':'active','phone_masked':'138****0001'}],storage=db,executor=queue,now=lambda:now)
         scheduler.client_factory=lambda provider:StarDayClient(provider,session_factory=lambda:self.client,session_cache=scheduler.sessions,allow_login=False)
-        with patch('star_day_auth.AppLoginSession.from_credentials') as primary:
+        with patch('features.star_day.auth.AppLoginSession.from_credentials') as primary:
             for _ in range(5):scheduler.tick();queue.drain();scheduler.status();queue.drain()
             primary.assert_not_called();self.client.post.assert_not_called()
         self.assertEqual(scheduler.data['accounts']['a']['query_state'],'waiting_session')
@@ -125,7 +125,7 @@ class SmsTests(unittest.TestCase):
         self.assertEqual(public.json['accounts'][0]['status'],'active')
         self.assertEqual(shared.public()[0]['status'],'login_required')
         self.assertEqual(scheduler.sms_snapshot(saved.id)['phone'],saved.phone)
-        with patch('star_day_auth.AppLoginSession.from_credentials') as primary:
+        with patch('features.star_day.auth.AppLoginSession.from_credentials') as primary:
             with star_day_session(lambda:scheduler.credentials(saved.id),cache=scheduler.sessions,allow_login=False):pass
             primary.assert_not_called()
         scheduler.sessions.forget(saved.id)
